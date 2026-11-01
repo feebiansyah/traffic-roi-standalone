@@ -1,13 +1,25 @@
 'use strict';
 // One raw-value decision shared by table, count, clipboard and application.
 function listDecision(row,provider=state.provider){
- if(typeof row.cost!=='number'||!Number.isFinite(row.cost)||row.cost<0)return 'UNKNOWN';
- if(row.cost<1000)return 'INSUFFICIENT';
- if(typeof row.roi!=='number'||!Number.isFinite(row.roi))return 'UNKNOWN';
+ let cost,roiCompare;
+ try{
+  cost=exactDecimal.value(row.exactMoney?.cost??row.cost);
+  if(exactDecimal.compare(cost,0)<0)return 'UNKNOWN';
+  if(exactDecimal.compare(cost,1000)<0)return 'INSUFFICIENT';
+  if(row.exactMoney){
+   // ROI >= p iff commission * 100 >= cost * (100 + p), cost > 0.
+   // Cross products retain exact decimal thresholds without any division.
+   const commission=exactDecimal.value(row.exactMoney.commission);
+   roiCompare=p=>exactDecimal.compare(exactDecimal.multiply(commission,100),exactDecimal.multiply(cost,100+p));
+  }else{
+   if(typeof row.roi!=='number'||!Number.isFinite(row.roi))return 'UNKNOWN';
+   roiCompare=p=>exactDecimal.compare(row.roi,p);
+  }
+ }catch{return 'UNKNOWN';}
  if(provider==='adsterra'&&(!/^\d+$/.test(String(row.id))||!Number.isSafeInteger(Number(row.id))||Number(row.id)<=0||
   ![row.clicks,row.impressions].every(v=>Number.isSafeInteger(v)&&v>=0)))return 'UNKNOWN';
- const safe=provider==='clickadu'?row.roi>=30
-  :row.roi>=20||(row.roi>10&&row.impressions>0&&row.clicks/row.impressions*100>8);
+ const safe=provider==='clickadu'?roiCompare(30)>=0
+  :roiCompare(20)>=0||(roiCompare(10)>0&&row.impressions>0&&BigInt(row.clicks)*100n>BigInt(row.impressions)*8n);
  return safe?'SAFE':'BLACKLIST';
 }
 function listRowLabel(row,kind){

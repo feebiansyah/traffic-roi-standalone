@@ -7,6 +7,15 @@ function canonicalCampaign(id){
  if(!/^\d+$/.test(String(id))||!Number.isSafeInteger(Number(id))||Number(id)<=0)throw Error('Campaign Adsterra tidak valid.');
  return String(Number(id));
 }
+function clickaduWriteGuard(id){
+ // Survives config deletion/editing/recreation and token changes in this page.
+ // Numeric aliases use a string canonical form, never a lossy Number cast.
+ if(typeof id!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(id))throw Error('Campaign Clickadu tidak valid.');
+ const physical=/^\d+$/.test(id)?id.replace(/^0+(?=\d)/,''):id;
+ const guards=state.sessions.clickadu.writeGuards??=new Map(),key='clickadu:'+physical;
+ if(!guards.has(key))guards.set(key,{uncertain:false});
+ return guards.get(key);
+}
 function campaignMethod(config=activeConfig()){
  if(!config)return null;
  const methods=session().appMethods??=new Map(),key=canonicalCampaign(config.id);
@@ -131,7 +140,7 @@ function renderListRejection(){
 function operationContext(config,{analysis=false}={}){
  const provider=state.provider,owner=session(),token=owner.token,id=provider==='adsterra'?canonicalCampaign(config.id):config.id;
  const input=analysis?requireSetup(true):null,originalAnalysis=state.analysis,csv=state.csv,source=config.source;
- const method=provider==='adsterra'?campaignMethod(config):config;
+ const method=provider==='adsterra'?campaignMethod(config):clickaduWriteGuard(config.id);
  let version=method.version,plan=config.listMethod,stopped=false,requests=0,writes=0;
  const deadline=Date.now()+90000,issues=[];
  const ctx={provider,id,config,owner,token,method,input,originalAnalysis,csv,issues,ambiguous:false,writeStarted:false,
@@ -212,7 +221,7 @@ async function applyPlacementList(receipt=null){
   const delta=`Tambah ${target.filter(id=>!oldList.includes(id)).length}; keluarkan ${oldList.filter(id=>!target.includes(id)).length} ID dari daftar lama.`;
   if(!window.confirm(`Campaign ${cfg.label||cfg.id} (${cfg.id})\n${previous} → ${listName(kind)}. Target final: ${target.length} ID. Daftar lama diganti penuh. ${delta}${kind==='BLACKLIST'&&!target.length?' Tidak ada placement yang dikecualikan.':''}\n${excluded.length?'Pengecualian: '+excluded.join(', ')+'\n':''}${resetBids.length?resetBids.length+' override Custom Bid seluruh GEO pada target dihapus setelah verifikasi; tidak dipulihkan saat ON.':'Custom Bid dipertahankan.'}\nTerapkan?`)){notice('Penerapan dibatalkan. Tidak ada write provider.');return;}
   ctx.assert();
-  const rows=calculate(await getStats(ctx.id,ctx.input.from,ctx.input.till,ctx.request),commissions(ctx.input.source,ctx.input.from,ctx.input.till).map,ctx.input.fx);
+  const rows=calculate(await getStats(ctx.id,ctx.input.from,ctx.input.till,ctx.request),commissions(ctx.input.source,ctx.input.from,ctx.input.till).map,ctx.input.fxExact??ctx.input.fx);
   if(!equalSet(strictListIds(listCandidates(rows,kind),{clickadu:ctx.provider==='clickadu'}),candidates))throw Error('Kandidat berubah. Analisis dan konfirmasi baru diperlukan.');
   const snapshot=await ctx.snapshot();
   if(comparableSnapshot(snapshot)!==comparableSnapshot(before)||bids&&!bidsEqual(bids,await ctx.bids()))throw Error('Campaign/daftar/Custom Bid berubah. Siapkan konfirmasi baru.');

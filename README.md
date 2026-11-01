@@ -5,7 +5,7 @@ Website ringan **tanpa database, tanpa login, dan tanpa instalasi di komputer op
 ## Deploy sekali oleh pemilik tool (bukan operator)
 
 1. Buat repository GitHub **baru** (contoh `traffic-roi-session`). **Jangan** gunakan repository `business-tracker` production.
-2. Upload isi repository, termasuk `index.html`, ketiga helper JavaScript (`list-rules.js`, `placement-lists.js`, `campaign-method.js`), `vercel.json`, folder `api/`, dan `README.md`.
+2. Upload isi repository, termasuk `index.html`, helper JavaScript (`exact-decimal.js`, `list-rules.js`, `placement-lists.js`, `campaign-method.js`), `vercel.json`, folder `api/`, dan `README.md`.
 3. Buka Vercel → Add New → Project → Import repository baru.
 4. Framework Preset: **Other**, Root Directory: `./`. Tidak memerlukan database, environment variables, package.json, npm install, atau Build Command.
 5. Klik Deploy. Setelah sukses, bagikan URL Vercel kepada operator yang dipercaya.
@@ -43,6 +43,7 @@ Website ringan **tanpa database, tanpa login, dan tanpa instalasi di komputer op
 ```text
 index.html        UI dan analisis CSV client-side
 api/relay.mjs     Vercel Function untuk request API provider (tanpa penyimpanan)
+exact-decimal.js   Desimal exact (BigInt berskala) untuk agregasi dan batas keputusan
 list-rules.js      Satu keputusan kandidat/status, memakai nilai sebelum pembulatan
 placement-lists.js Bukti daftar, context/timeout, penerapan dan receipt penolakan sesi
 campaign-method.js Adopsi/pergantian metode Adsterra, kesiapan dan ON/OFF terverifikasi
@@ -84,6 +85,9 @@ README.md         Petunjuk pemilik tool
   ROI unknown/invalid, dan biaya belum cukup tidak otomatis menjadi kandidat.
   Tabel, jumlah, Copy ID, serta target memakai helper yang sama; pengecualian
   terkonfirmasi ditandai di tabel dan target akhir.
+  Spend statistik dipertahankan dari token desimal respons, kurs dari input,
+  serta komisi CSV dari parsing sampai agregasi. Batas biaya/ROI/CTR memakai
+  aritmetika exact dan perbandingan silang, tanpa epsilon/pembulatan tampilan.
 - Tidak ada retry write/rollback atau pemulihan bid otomatis. Penolakan 422
   hanya memakai record `errors.placement_ids[].ids` atau
   `errors.landing_ids[landing][].placement_ids` beserta alasan aman. Landing ID
@@ -105,6 +109,8 @@ README.md         Petunjuk pemilik tool
   kegagalan verifikasi tidak diklaim berhasil. **Write yang benar-benar ambigu**
   tetap memblokir write berikutnya pada campaign fisik selama sesi, termasuk
   setelah GET cocok. OFF tetap tersedia tetapi tidak menghapus ketidakpastian.
+  Guard Clickadu memakai ID campaign fisik dalam memori provider, bukan objek
+  config. Hapus/tambah ulang atau edit config tidak menghapus/memindahkan guard.
   Periksa provider; aplikasi session-only
   tidak memberikan koordinasi lintas tab/operator, transaksi atomik, atau exactly-once.
   Refresh menghapus guard lokal bersama seluruh sesi; bukan bukti request lama berhenti.

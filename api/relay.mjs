@@ -34,6 +34,18 @@ const NO_STORE = {
 const reply = (data, status=200) => Response.json(data,{status,headers:NO_STORE});
 const invalidRequest=(error,status)=>reply({error,uncertain:false},status);
 
+// Preserve only statistics spent numeric lexemes before JSON.parse can round
+// them. The relay's internal DTO accepts the same decimal string as the UI.
+// Matching whole JSON string tokens prevents replacing text inside strings.
+function statisticsJson(text){
+  let previous='',end=0;
+  return JSON.parse(text.replace(/"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,(token,offset)=>{
+    const money=token[0]!=='"'&&previous==='spent'&&/^\s*:\s*$/.test(text.slice(end,offset));
+    previous=token[0]==='"'?JSON.parse(token):'';end=offset+token.length;
+    return money?JSON.stringify(token):token;
+  }));
+}
+
 // Only recognized public validation reasons and bounded numeric IDs may leave
 // the relay. Never forward arbitrary provider messages, URLs or raw error JSON.
 function whitelistRejection(data,target){
@@ -160,7 +172,7 @@ export async function POST(request) {
     const jsonText=Buffer.concat(chunks.map(x=>Buffer.from(x)),total).toString('utf8');
     if(!result.ok)return reply(listFailure(provider,method,target.pathname,result.status,jsonText,body),result.status);
     let value;
-    try {value=jsonText?JSON.parse(jsonText):null;}catch{return reply({error:'Respons JSON provider tidak valid.'},502);}
+    try {value=jsonText?(method==='GET'&&['/advertiser/stats.json','/v1.0/api/client/statistics/'].includes(target.pathname)?statisticsJson(jsonText):JSON.parse(jsonText)):null;}catch{return reply({error:'Respons JSON provider tidak valid.'},502);}
     return reply({ok:true,value,status:result.status});
   } catch {
     return reply({error:method==='GET'
