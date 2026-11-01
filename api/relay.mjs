@@ -14,7 +14,10 @@ const RULES = {
   adsterra: [
     [/^\/advertiser\/stats\.json$/, ['GET']],
     [/^\/advertiser\/campaign\/[0-9]+\/linking\/blacklist\.json$/, ['GET']],
+    [/^\/advertiser\/campaign\/[0-9]+\/linking\/whitelist\.json$/, ['GET','POST']],
     [/^\/advertiser\/linking\/blacklist\.json$/, ['PUT']],
+    [/^\/advertiser\/linking\/whitelist\.json$/, ['PUT']],
+    [/^\/advertiser\/linking\/blacklist\/clean\.json$/, ['POST']],
     [/^\/advertiser\/campaign\/[0-9]+\/custom_bid\.json$/, ['GET','POST','PATCH','DELETE']],
     [/^\/advertiser\/campaign\/[0-9]+\.json$/, ['GET','PATCH']],
   ],
@@ -29,6 +32,41 @@ const NO_STORE = {
   'Referrer-Policy': 'no-referrer',
 };
 const reply = (data, status=200) => Response.json(data,{status,headers:NO_STORE});
+
+// Only recognized public validation reasons and bounded numeric IDs may leave
+// the relay. Never forward arbitrary provider messages, URLs or raw error JSON.
+function listFailure(provider, method, path, status, text) {
+  const out={error:`API ${provider} menolak request (HTTP ${status}).`,uncertain:method!=='GET'&&(status>=500||status===408||status===429)};
+  if(provider!=='adsterra'||status!==422||text.length>65536)return out;
+  let data;try{data=JSON.parse(text);}catch{return out;}
+  const campaign=path.match(/^\/advertiser\/campaign\/([1-9]\d*)\/linking\/blacklist\.json$/)?.[1];
+  const refusal=data?.message==='Unprocessable Content'&&Object.keys(data).every(k=>['message','errors'].includes(k))
+    &&data.errors&&typeof data.errors==='object'&&!Array.isArray(data.errors)&&Object.keys(data.errors).length===1
+    &&Array.isArray(data.errors.campaign_ids)&&data.errors.campaign_ids.length===1
+    &&data.errors.campaign_ids[0]===`Campaigns, inoperable due to having a whitelist: ${campaign}`;
+  if(method==='GET'&&campaign&&refusal){
+    out.error='Blacklist tidak dapat dibaca karena campaign memiliki Whitelist.';
+    out.listEvidence={kind:'BLACKLIST_UNREADABLE_WHITELIST',campaignId:campaign};
+    return out;
+  }
+  if(method!=='PUT'||path!=='/advertiser/linking/whitelist.json')return out;
+  const reasons=new Set(),ids=new Set();
+  const allowed=['Not suitable tags','Not suitable ad unit','Not exists','Unsuccessfully linked','Blacklisted'];
+  let nodes=0;
+  function visit(value,depth=0){
+    if(depth>8||++nodes>3000)return;
+    if(typeof value==='string'&&allowed.includes(value))reasons.add(value);
+    if(!value||typeof value!=='object')return;
+    if(Array.isArray(value.placement_ids))for(const id of value.placement_ids.slice(0,200)){
+      if(/^[1-9]\d*$/.test(String(id))&&Number.isSafeInteger(Number(id)))ids.add(String(id));
+    }
+    for(const child of Object.values(value))visit(child,depth+1);
+  }
+  visit(data.errors);
+  if(reasons.size)out.error+=' '+[...reasons].join('; ')+'.';
+  if(ids.size)out.rejectedIds=[...ids].slice(0,100);
+  return out;
+}
 
 export async function POST(request) {
   // Browser request must come from same deployed origin (not cross-site form/fetch).
@@ -70,42 +108,43 @@ export async function POST(request) {
     ? {Authorization:token}
     : {'X-API-Key':token, Accept:'application/json'};
   if(serialized!==undefined)headers['Content-Type']='application/json';
+  let timeout;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(()=>controller.abort(),45000);
+    timeout = setTimeout(()=>controller.abort(),45000);
     let result;
     try {
       result=await fetch(target.toString(),{
         method, headers, body:serialized,
         redirect:'manual', cache:'no-store', signal:controller.signal,
       });
-    } finally {clearTimeout(timeout);}
+    } finally { /* The timeout also bounds reading the response body below. */ }
     if(result.status>=300 && result.status<400) return reply({error:'Redirect provider ditolak.'},502);
     // Limit response size regardless of whether provider provides Content-Length.
     const advertised=Number(result.headers.get('content-length')||0);
     if(advertised>MAX_RESPONSE) return reply({error:'Respons provider terlalu besar.'},502);
+    const responseLimit=result.ok?MAX_RESPONSE:65536;
     const chunks=[];
     let total=0;
     if(result.body){
       const reader=result.body.getReader();
       try {
         while(true){const {value,done}=await reader.read();if(done)break;total+=value.byteLength;
-          if(total>MAX_RESPONSE){await reader.cancel();return reply({error:'Respons provider terlalu besar.'},502);}
+          if(total>responseLimit){await reader.cancel();return reply({error:'Respons provider terlalu besar.',uncertain:method!=='GET'},502);}
           chunks.push(value);
         }
       } finally {reader.releaseLock();}
     }
-    // Never reveal provider error body; it might contain private information.
-    if(!result.ok) return reply({error:`API ${provider} menolak request (HTTP ${result.status}).`},result.status);
     const jsonText=Buffer.concat(chunks.map(x=>Buffer.from(x)),total).toString('utf8');
+    if(!result.ok)return reply(listFailure(provider,method,target.pathname,result.status,jsonText),result.status);
     let value;
     try {value=jsonText?JSON.parse(jsonText):null;}catch{return reply({error:'Respons JSON provider tidak valid.'},502);}
     return reply({ok:true,value,status:result.status});
   } catch {
     return reply({error:method==='GET'
       ? 'Koneksi provider gagal atau timeout.'
-      : 'Write mungkin sudah diproses, tetapi respons tidak dapat dipastikan. Periksa dashboard provider dan jangan ulang otomatis.'},502);
-  }
+      : 'Write mungkin sudah diproses, tetapi respons tidak dapat dipastikan. Periksa dashboard provider dan jangan ulang otomatis.',uncertain:method!=='GET'},502);
+  } finally {clearTimeout(timeout);}
 }
 
 export function GET(){return reply({ok:true,app:'Traffic ROI Session',message:'API siap, gunakan dashboard untuk melakukan request.'});}
