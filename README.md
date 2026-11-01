@@ -5,7 +5,7 @@ Website ringan **tanpa database, tanpa login, dan tanpa instalasi di komputer op
 ## Deploy sekali oleh pemilik tool (bukan operator)
 
 1. Buat repository GitHub **baru** (contoh `traffic-roi-session`). **Jangan** gunakan repository `business-tracker` production.
-2. Upload **isi folder ZIP ini** ke root repository, yaitu `index.html`, `vercel.json`, folder `api/`, dan `README.md`. **Jangan upload ZIP-nya sebagai satu berkas**.
+2. Upload isi repository, termasuk `index.html`, ketiga helper JavaScript (`list-rules.js`, `placement-lists.js`, `campaign-method.js`), `vercel.json`, folder `api/`, dan `README.md`.
 3. Buka Vercel → Add New → Project → Import repository baru.
 4. Framework Preset: **Other**, Root Directory: `./`. Tidak memerlukan database, environment variables, package.json, npm install, atau Build Command.
 5. Klik Deploy. Setelah sukses, bagikan URL Vercel kepada operator yang dipercaya.
@@ -16,9 +16,11 @@ Website ringan **tanpa database, tanpa login, dan tanpa instalasi di komputer op
 2. Pilih **Adsterra** atau **Clickadu** dari sidebar.
 3. Di tab **Pengaturan**, masukkan token/API key dan klik **Simpan Koneksi**. Di bagian Konfigurasi Campaign tambahkan Campaign ID, nama opsional, serta `Tag_link1` dari CSV Shopee.
 4. Di tab **Placement/Zone**, pilih campaign, periode, kurs USD-IDR, dan CSV Komisi Shopee. Klik **Analisa**.
-5. Pada Campaign, pilih rencana **Blacklist/Whitelist**, lalu analisis di Placement/Zone. Pilihan tersebut belum mengubah provider. **Terapkan** menampilkan satu konfirmasi browser, mengganti seluruh daftar tujuan, lalu memverifikasi GET. Whitelist wajib memiliki kandidat; ID yang ditolak tidak dihapus otomatis. Pada Adsterra, Custom Bid **ID** tetap dapat dikelola dengan alur existing; GLOBAL hanya dibaca.
-6. Tab **Campaign** menampilkan daftar campaign; Adsterra bisa Refresh Status dan ON/OFF manual. Tombol Sync mengambil statistik harian selama periode yang dipilih di Placement/Zone (perlu CSV sebelumnya). Klik nama campaign untuk melihat hasil per hari pada sesi ini.
-7. Refresh atau buka ulang halaman untuk memulai sesi baru. Token, konfigurasi, CSV, dan semua hasil dari memori halaman hilang. **Token asli provider tidak otomatis dicabut**.
+5. Pada **Campaign Adsterra**, tetapkan metode aplikasi **Blacklist/Whitelist** dengan satu konfirmasi browser. Daftar existing yang kompatibel dapat diadopsi tanpa OFF/reset (termasuk Blacklist kosong saat ACTIVE). Metode yang sama tidak mereset daftar. Pergantian metode mereset daftar setelah OFF terverifikasi, mempertahankan seluruh Custom Bid, dan tidak mengaktifkan campaign kembali. Whitelist yang baru direset belum boleh ON sebelum diisi. Placement mengikuti metode sesi ini dan **tidak melakukan clear atau mengganti metode**.
+6. Pada **Campaign Clickadu**, GET menampilkan metode aktual. Tanpa rencana baru, analisis mengikuti metode tersebut. Pilihan rencana belum mengubah provider; satu PUT saat Terapkan mengganti metode dan seluruh daftar final sekaligus, tanpa clear terpisah.
+7. Analisis → **Terapkan** → satu konfirmasi browser → GET verifikasi. Whitelist wajib nonkosong. Bila provider menolak ID, alasan dan tombol **Terapkan tanpa placement yang ditolak** tampil di atas form. Tombol ini menyiapkan target baru, menampilkan pengecualian kumulatif, dan meminta satu konfirmasi baru; tidak mengulang write otomatis. Custom Bid **ID** dapat dibuat satu item, diedit, atau dihapus; seluruh GEO dibaca, GLOBAL bukan editor terpisah.
+8. Tab **Campaign** menyediakan Refresh Status, ON/OFF Adsterra, dan laporan sesi existing. OFF juga tersedia langsung dari Placement saat operasi berlangsung/belum pasti. Auto terjadwal tetap tidak tersedia. Sync/laporan dan import komisi tidak dirombak.
+9. Refresh/buka ulang halaman memulai sesi baru. Token, metode, readiness, konfigurasi, CSV, dan semua hasil memori hilang. **Token asli provider tidak otomatis dicabut**.
 
 ## Perbedaan yang memang tidak mungkin identik tanpa database
 
@@ -41,7 +43,9 @@ Website ringan **tanpa database, tanpa login, dan tanpa instalasi di komputer op
 ```text
 index.html        UI dan analisis CSV client-side
 api/relay.mjs     Vercel Function untuk request API provider (tanpa penyimpanan)
-placement-lists.js Pemilihan kandidat positif, preview dan penerapan daftar sesi
+list-rules.js      Satu keputusan kandidat/status, memakai nilai sebelum pembulatan
+placement-lists.js Bukti daftar, context/timeout, penerapan dan receipt penolakan sesi
+campaign-method.js Adopsi/pergantian metode Adsterra, kesiapan dan ON/OFF terverifikasi
 vercel.json       Konfigurasi Vercel dan security headers
 README.md         Petunjuk pemilik tool
 ```
@@ -61,21 +65,47 @@ README.md         Petunjuk pemilik tool
   `Unprocessable Content / errors.campaign_ids` dan alasan tepat campaign memiliki
   whitelist hanya diterima sebagai Blacklist **tidak dapat dibaca**, setelah
   Whitelist campaign yang sama terbukti valid/nonkosong. Null/404/error lain gagal.
-- Bila daftar lawan harus dikosongkan, konfirmasi mencakup OFF jika diperlukan.
+- Hanya pergantian metode di Campaign Adsterra yang dapat mereset daftar.
+  Bila daftar perlu dikosongkan, konfirmasi mencakup OFF jika diperlukan.
   Campaign harus terbukti INACTIVE sebelum clear; tidak dinyalakan kembali otomatis.
-  Setelah clear, daftar dibaca ulang sebelum target diterapkan. Whitelist tidak
+  Bila Blacklist tidak dapat dibaca karena Whitelist, Whitelist dihapus dahulu,
+  kemudian Blacklist dibaca ulang dan direset berdasarkan hasil aktual.
+  Setelah clear terverifikasi, metode sesi diterbitkan; target diisi melalui Placement.
+  Whitelist tidak
   mengubah bid. Blacklist menghapus override seluruh GEO pada target hanya setelah
   daftar terverifikasi, termasuk ketika daftar sudah sama.
-- Aturan Blacklist tidak diubah. Whitelist menggunakan syarat positif standalone:
-  biaya ≥Rp1.000 serta ROI ≥30% (Clickadu), atau ROI >10% DAN CTR >8% (Adsterra).
-  Nilai unknown dan biaya belum cukup tidak lolos.
+- Aturan disamakan dengan [Business Tracker 055e01b](https://github.com/feebiansyah/business-tracker/tree/055e01b2cecabf322b53646b0362511dd85c4675):
+  minimum biaya **Rp1.000**, nilai asli sebelum pembulatan tampilan.
+  Clickadu: Blacklist **ROI <30%**, Whitelist **ROI ≥30%**.
+  Adsterra: aman/Whitelist **ROI ≥20% ATAU (ROI >10% DAN CTR >8%)**;
+  Blacklist biaya cukup, ROI valid dan tidak memenuhi aman. ROI 25%/CTR 5%
+  masuk Whitelist, bukan Blacklist. ROI ≥20% tetap aman dengan impresi valid nol.
+  Count harus integer aman/non-negatif; missing, whitespace, boolean, overflow,
+  ROI unknown/invalid, dan biaya belum cukup tidak otomatis menjadi kandidat.
+  Tabel, jumlah, Copy ID, serta target memakai helper yang sama; pengecualian
+  terkonfirmasi ditandai di tabel dan target akhir.
 - Tidak ada retry write/rollback atau pemulihan bid otomatis. Penolakan 422
-  menampilkan alasan publik yang dikenal dan cuplikan ID penolakan yang merupakan
-  bagian target terkonfirmasi; bukan klaim seluruh ID lain diterima. Tidak ada
-  tombol pengecualian otomatis pada tahap ini.
-- Request write ambigu atau hasil setelah write yang belum terverifikasi memblokir
-  penerapan berikutnya pada config selama sesi ini. GET yang kebetulan cocok tidak
-  menghapus ketidakpastian request tersebut. Periksa provider; aplikasi session-only
+  hanya memakai record `errors.placement_ids[].ids` atau
+  `errors.landing_ids[landing][].placement_ids` beserta alasan aman. Landing ID
+  bukan placement ID. ID di luar target ditolak, ukuran dibatasi, dan hasil yang
+  tidak lengkap diberi keterangan; bukan klaim ID lainnya pasti diterima.
+  Receipt penolakan terikat koneksi, provider, campaign, input/CSV/analisis,
+  metode/versi, target dan TTL lima menit. Pergantian konteks membatalkannya.
+- PUT Clickadu mempertahankan whitelist field writable referensi, termasuk
+  `pushNotificationCreative`, `cohort`, serta targeting selain Zone.
+- Readiness Adsterra memakai kedua bukti daftar yang disetujui dan GET terbaru,
+  bukan dugaan mode editor. Campaign legacy yang belum pernah diatur tetap dapat
+  ON/OFF; pengaturan pertama yang terhenti **tidak** dianggap legacy. Drift
+  daftar, Whitelist kosong/belum diterapkan, dan write ambigu menahan ON.
+  OFF tidak diblokir oleh kebutuhan metode. GET tidak mempromosikan readiness.
+- Pipeline daftar/metode dibatasi 90 detik, 40 request, timeout HTTP maksimal
+  10 detik, sequential (OFF protektif menunggu write yang sedang dikirim selesai
+  atau timeout sebelum OFF). Tidak ada polling. Hasil status lama diabaikan.
+- Penolakan HTTP yang sudah selesai dapat disiapkan ulang dengan konfirmasi baru;
+  kegagalan verifikasi tidak diklaim berhasil. **Write yang benar-benar ambigu**
+  tetap memblokir write berikutnya pada campaign fisik selama sesi, termasuk
+  setelah GET cocok. OFF tetap tersedia tetapi tidak menghapus ketidakpastian.
+  Periksa provider; aplikasi session-only
   tidak memberikan koordinasi lintas tab/operator, transaksi atomik, atau exactly-once.
   Refresh menghapus guard lokal bersama seluruh sesi; bukan bukti request lama berhenti.
 

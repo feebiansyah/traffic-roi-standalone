@@ -29,7 +29,9 @@
  <div class="surface"><div class="sectionbar"><div><h2 id="analysisTitle">Analisa Adsterra ROI</h2><p class="subtitle" id="analysisSubtitle">Statistik Placement Adsterra dipadankan dengan Tag_link3 Shopee. Daftar hanya berubah setelah konfirmasi eksplisit.</p></div></div>
   <p class="message notice" id="analysisConnectHint">Koneksi Adsterra belum dikonfigurasi. Buka Pengaturan untuk memasukkan token dan campaign.</p>
   <div id="analysisFeedback" class="message hidden" role="status"></div>
+  <div id="listRejection" class="message error hidden"><span id="listRejectionReason"></span> <button id="retryWhitelist" type="button" class="btn outline small">Terapkan tanpa placement yang ditolak</button></div>
   <p id="analysisMethod" class="tip"></p>
+  <button id="placementOff" type="button" class="btn outline small hidden">OFF Campaign</button>
   <form id="analysisForm" class="form-grid" autocomplete="off">
    <label>Campaign<select id="campaign" required><option value="">Pilih campaign</option></select></label>
    <label>Tanggal Mulai<input type="date" id="from" required></label>
@@ -74,7 +76,9 @@
 <div class="modalback hidden" id="historyBack" role="dialog" aria-modal="true"><div class="modal historyModal"><div class="sectionbar"><div><h2 id="historyTitle">Laporan Harian</h2><p class="subtitle">Spend, Komisi, dan Profit per hari dalam sesi.</p></div><button class="btn outline" id="historyClose" type="button">Tutup</button></div><p class="message notice" id="historyHint">Belum ada laporan harian. Klik Sync pada tab Campaign.</p><div class="table-frame hidden" id="historyTable"><div class="table-scroll"><table><thead><tr><th>Tanggal</th><th>Spend USD</th><th>Spend IDR</th><th>Komisi</th><th>Profit</th><th>ROI</th></tr></thead><tbody id="historyBody"></tbody></table></div></div></div></div>
 <!-- Internal compatibility nodes: hidden and not displayed to operators. -->
 <div class="hidden" aria-hidden="true"><div id="log"></div><button id="clearLog"></button><button id="clearSession"></button><button id="loadProvider"></button><button id="dailyReport"></button><button id="refreshBlacklist"></button><button id="refreshCampaign"></button><button id="turnOn"></button><button id="turnOff"></button><button id="closeDaily"></button><div id="dailyCard"><div id="dailyBody"></div></div><input id="search"><select id="filter"><option value="all">Semua</option></select><select id="sort"><option value="spend">Spend</option></select><div id="blacklistStatus"></div><div id="blacklistText"></div><div id="campaignState"></div><div id="campaignInfo"></div><div id="policyBadge"></div><div id="campaignHead"></div><div id="activities"></div><div id="providerInfo"></div><button id="exportCsv"></button></div>
+<script src="list-rules.js"></script>
 <script src="placement-lists.js"></script>
+<script src="campaign-method.js"></script>
 <script>
 
 'use strict';
@@ -88,7 +92,7 @@ async function confirmDialog(title,body,destructive=true){$('modalTitle').textCo
 function busy(on,info='Memproses ...'){state.busy=on;for(const id of ['analyze','loadProvider','dailyReport','refreshBlacklist','replaceBlacklist','refreshCampaign','turnOn','turnOff'])$(id).disabled=on;$('analyze').innerHTML=on?'<span class="spinner"></span> '+escapeHtml(info):'▶ Jalankan Analisis'}
 function safeError(e){const m=String(e?.message||'Gagal menjalankan operasi.');return m.replace(/Bearer\s+[^\s]+/ig,'[redacted]').slice(0,260)}
 function sleep(t){return new Promise(resolve=>setTimeout(resolve,t))}
-async function clickaduRead(path){for(let attempt=0;attempt<3;attempt++){try{return await api('GET',path)}catch(e){if(!/HTTP 429/.test(String(e.message))||attempt===2)throw e;await sleep(500*2**attempt)}}}
+async function clickaduRead(path,request=api){for(let attempt=0;attempt<3;attempt++){try{return await request('GET',path)}catch(e){if(request!==api||!/HTTP 429/.test(String(e.message))||attempt===2)throw e;await sleep(500*2**attempt)}}}
 function requireSetup(withCsv=false){const s=session(),campaign=($('campaign').value||'').trim(),token=($('token').value||'').trim(),source=$('source').value.trim(),fx=Number($('fx').value),from=$('from').value,till=$('till').value;
  if(!token)throw Error('Masukkan API token terlebih dahulu.');if(!/^[\w-]+$/.test(campaign))throw Error('Campaign ID tidak valid.');if(state.provider==='adsterra'&&!/^\d+$/.test(campaign))throw Error('Campaign Adsterra harus angka.');if(!source)throw Error('Source Tag_link1 wajib diisi.');if(!(fx>0)||!Number.isFinite(fx))throw Error('Kurs USD ke IDR harus lebih dari 0.');if(!from||!till||from>till)throw Error('Tanggal tidak valid.');if(withCsv&&!state.csv)throw Error('Upload CSV Shopee terlebih dahulu.');return {token,campaign,source,fx,from,till};}
 async function api(method,path,body,provider=state.provider,token=null){const tokenValue=token??$('token').value.trim();if(!tokenValue)throw Error('Token API kosong.');const resp=await fetch('/api/relay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,method,path,body,token:tokenValue}),cache:'no-store',credentials:'omit'});let obj;try{obj=await resp.json()}catch{throw Error('Server API gagal mengembalikan JSON.')}if(!resp.ok)throw Error(obj.error||`Provider HTTP ${resp.status}`);return obj.value;}
@@ -98,21 +102,23 @@ function parseAdsterraBids(data){if(!data||!Array.isArray(data.items)||!Number.i
 async function getBids(){return parseAdsterraBids(await api('GET',endpoint('custom_bid.json')))}
 function bidIdentity(b){return b.placement+':'+b.geo}
 function bidsEqual(left,right){if(!left||!right||left.length!==right.length)return false;const m=new Map(left.map(b=>[bidIdentity(b),Number(b.price)]));return right.every(b=>m.has(bidIdentity(b))&&m.get(bidIdentity(b))===Number(b.price))}
-async function getBlocked(){const c=requireSetup().campaign;const data=state.provider==='adsterra'?await api('GET',`/advertiser/campaign/${c}/linking/blacklist.json`):await api('GET',`/v1.0/api/client/campaigns/${encodeURIComponent(c)}/blocked/zone/`);let vals;if(state.provider==='adsterra')vals=Array.isArray(data)?data:data?.placement_ids;else {const r=data?.result??data;vals=Array.isArray(r)?r:Array.isArray(r?.items)?r.items:Array.isArray(r?.zones)?r.zones:null;}if(!Array.isArray(vals))throw Error('Respons blacklist provider tidak valid.');return [...new Set(vals.map(x=>{const v=(typeof x==='object'&&x!==null)?(x.zone??x.id):x;return String(v).trim();}).filter(Boolean))].sort();}
+async function getBlocked(){const c=requireSetup().campaign;if(state.provider==='adsterra')return (await readPlacementLists(c)).blacklist;const data=await api('GET',`/v1.0/api/client/campaigns/${encodeURIComponent(c)}/blocked/zone/`);const r=data?.result??data,vals=Array.isArray(r)?r:Array.isArray(r?.items)?r.items:Array.isArray(r?.zones)?r.zones:null;if(!Array.isArray(vals))throw Error('Respons blacklist provider tidak valid.');return [...new Set(vals.map(x=>String(typeof x==='object'&&x!==null?x.zone??x.id:x)).filter(Boolean))].sort();}
 function equalSet(a,b){return a&&b&&a.length===b.length&&a.every(x=>b.includes(x));}
 async function getCampaign(){const c=requireSetup().campaign;if(state.provider==='adsterra'){const d=await api('GET',`/advertiser/campaign/${c}.json`);if(![1,2,3,4].includes(d?.active))throw Error('Status campaign Adsterra tidak valid.');return {raw:d,label:({1:'OFF',2:'LIMITED',3:'ON',4:'NOT IN USE'})[d.active]};}const d=await api('GET',`/api/v2/campaigns/${encodeURIComponent(c)}/`);const raw=d?.result??d;if(!raw||typeof raw!=='object')throw Error('Status campaign Clickadu tidak tersedia.');return {raw,label:String(raw.status??'—').toUpperCase()};}
-async function getStats(c,from,till){if(state.provider==='adsterra'){
- const raw=await api('GET',query('/advertiser/stats.json',{'start_date':from,'finish_date':till,'group_by[]':'placement',campaign:c}));if(!raw||!Array.isArray(raw.items))throw Error('Data statistik Adsterra tidak valid.');const map=new Map();for(const v of raw.items){if(typeof v!=='object'||v===null)throw Error('Baris statistik Adsterra tidak valid.');const id=String(v.placement??'').trim();if(!id)throw Error('Placement kosong dari provider.');const impressions=nonneg(v.impressions),clicks=nonneg(v.clicks),spent=nonneg(v.spent);const item=map.get(id)||{id,impressions:0,clicks:0,spent:0};item.impressions+=impressions;item.clicks+=clicks;item.spent+=spent;map.set(id,item);}return [...map.values()];
- }let all=[];let page=1,total=1;do {const raw=await clickaduRead(query('/v1.0/api/client/statistics/',{dateFrom:from,dateTill:till,groupBy:'zone','campaignId[]':[c],page,limit:100,withTestExpenses:0}));const d=raw?.result;if(!d||!Array.isArray(d.items)||Number(d.page)!==page||!Number.isInteger(Number(d.totalPages))||d.totalPages>1000)throw Error('Pagination statistik Clickadu tidak valid.');total=Number(d.totalPages);for(const x of d.items){if(x.zone==null||String(x.zone).trim()==='')continue;all.push({id:String(x.zone).trim(),spent:nonneg(x.spent),clicks:nonneg(x.clicks),impressions:nonneg(x.impressions),cpm:nonneg(x.cpm),conversions:nonneg(x.conversions||0)});}page++;if(page<=total)await sleep(150);}while(page<=total);return all;
+async function getStats(c,from,till,request=api){if(state.provider==='adsterra'){
+ const raw=await request('GET',query('/advertiser/stats.json',{'start_date':from,'finish_date':till,'group_by[]':'placement',campaign:c}));if(!raw||!Array.isArray(raw.items))throw Error('Data statistik Adsterra tidak valid.');const map=new Map();for(const v of raw.items){if(typeof v!=='object'||v===null)throw Error('Baris statistik Adsterra tidak valid.');const id=String(v.placement??'').trim();if(!id)throw Error('Placement kosong dari provider.');const impressions=adsterraCount(v.impressions),clicks=adsterraCount(v.clicks),spent=adsterraStatistic(v.spent);const item=map.get(id)||{id,impressions:0,clicks:0,spent:0};item.impressions+=impressions;item.clicks+=clicks;item.spent+=spent;if(!Number.isSafeInteger(item.impressions)||!Number.isSafeInteger(item.clicks)||!Number.isFinite(item.spent))throw Error('Agregasi statistik Adsterra tidak valid.');map.set(id,item);}return [...map.values()];
+ }let all=[];let page=1,total=1;do {const raw=await clickaduRead(query('/v1.0/api/client/statistics/',{dateFrom:from,dateTill:till,groupBy:'zone','campaignId[]':[c],page,limit:100,withTestExpenses:0}),request);const d=raw?.result;if(!d||!Array.isArray(d.items)||Number(d.page)!==page||!Number.isInteger(Number(d.totalPages))||d.totalPages>1000)throw Error('Pagination statistik Clickadu tidak valid.');total=Number(d.totalPages);for(const x of d.items){if(x.zone==null||String(x.zone).trim()==='')continue;all.push({id:String(x.zone).trim(),spent:nonneg(x.spent),clicks:nonneg(x.clicks),impressions:nonneg(x.impressions),cpm:nonneg(x.cpm),conversions:nonneg(x.conversions||0)});}page++;if(page<=total)await sleep(150);}while(page<=total);return all;
 }
-function nonneg(v){if(v===''||v===null||v===undefined)throw Error('Statistik provider tidak lengkap.');const n=Number(v);if(!Number.isFinite(n)||n<0)throw Error('Nilai statistik provider tidak valid.');return n}
+function nonneg(v){if(!['number','string'].includes(typeof v)||typeof v==='string'&&!v.trim())throw Error('Statistik provider tidak lengkap/invalid.');const n=Number(v);if(!Number.isFinite(n)||n<0)throw Error('Nilai statistik provider tidak valid.');return n}
+function adsterraStatistic(value){if(!['number','string'].includes(typeof value)||typeof value==='string'&&!value.trim())throw Error('Statistik Adsterra tidak lengkap/invalid.');return nonneg(value);}
+function adsterraCount(value){const n=adsterraStatistic(value);if(!Number.isSafeInteger(n))throw Error('Count Adsterra harus integer aman.');return n;}
 function parseCommission(text,row){let s=String(text).trim().replace(/^Rp\s*/i,'');if(/^-?\d+$/.test(s)){}else if(/^-?\d+[.,]\d{1,5}$/.test(s))s=s.replace(',','.');else if(/^-?\d{1,3}(?:\.\d{3}){2,}$/.test(s))s=s.replaceAll('.','');else if(/^-?\d{1,3}(?:\.\d{3})+,\d{1,5}$/.test(s))s=s.replaceAll('.','').replace(',','.');else throw Error(`Baris ${row}: Komisi Shopee tidak valid.`);const n=Number(s);if(!Number.isFinite(n)||Math.abs(n)>=1e16)throw Error(`Baris ${row}: Komisi Shopee tidak valid.`);return n;}
 function dateShopee(s,row){let x=String(s).trim(),m=x.match(/^(\d{4})-(\d\d)-(\d\d)(?:\s+(\d\d):(\d\d)(?::(\d\d))?)?$/),y,d,mo;if(m){y=+m[1];mo=+m[2];d=+m[3];}else{m=x.match(/^(\d\d)\/(\d\d)\/(\d{4})(?:\s+(\d\d):(\d\d)(?::(\d\d))?)?$/);if(!m)throw Error(`Baris ${row}: tanggal pemesanan tidak valid.`);d=+m[1];mo=+m[2];y=+m[3];}const hr=Number(m[4]||0),min=Number(m[5]||0),sec=Number(m[6]||0);if(hr>23||min>59||sec>59)throw Error(`Baris ${row}: jam tidak valid.`);const date=new Date(Date.UTC(y,mo-1,d));if(date.getUTCFullYear()!==y||date.getUTCMonth()!==mo-1||date.getUTCDate()!==d)throw Error(`Baris ${row}: tanggal pemesanan tidak valid.`);return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`}
 function splitCsv(text,delimiter){const records=[];let fields=[],value='',quoted=false;for(let i=0;i<text.length;i++){const c=text[i];if(quoted){if(c==='"'&&text[i+1]==='"'){value+='"';i++;}else if(c==='"'){quoted=false;}else value+=c;}else if(c==='"'){if(value)throw Error('CSV quote tidak valid.');quoted=true;}else if(c===delimiter){fields.push(value);value='';}else if(c==='\r'||c==='\n'){if(c==='\r'&&text[i+1]==='\n')i++;fields.push(value);value='';if(fields.some(x=>x.trim()!==''))records.push(fields);fields=[];}else value+=c;}if(quoted)throw Error('CSV memiliki tanda kutip yang tidak ditutup.');fields.push(value);if(fields.some(x=>x.trim()!==''))records.push(fields);return records;}
 async function readCsv(file){if(!file)throw Error('Pilih file CSV Shopee.');if(file.size>10*1024*1024)throw Error('CSV maksimal 10 MiB.');let text;try{text=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer()).replace(/^\uFEFF/,'')}catch{throw Error('CSV harus menggunakan UTF-8.');}if(text.includes('\0'))throw Error('CSV berisi byte NUL.');const req=['Waktu Pemesanan','Tag_link1','Tag_link3','Komisi Bersih Affiliate (Rp)'];const choices=[];for(const delimiter of [',',';']){try{const r=splitCsv(text,delimiter);const h=(r[0]||[]).map(x=>x.trim());if(req.every(k=>h.filter(v=>v===k).length===1))choices.push({r,h});}catch{}}
  if(choices.length!==1)throw Error(choices.length?'Delimiter CSV ambigu.':'Header CSV Shopee wajib tidak lengkap atau duplikat.');const {r,h}=choices[0];if(r.length>100001)throw Error('CSV maksimal 100.000 baris.');const ix=req.map(k=>h.indexOf(k));const rows=r.slice(1).map((row,i)=>({date:dateShopee(row[ix[0]]||'',i+2),tag:String(row[ix[1]]||'').trim().toUpperCase(),id:String(row[ix[2]]||'').trim(),commission:parseCommission(row[ix[3]]||'',i+2)}));if(!rows.length)throw Error('CSV tidak memiliki baris data.');return {name:file.name,rows};}
 function commissions(s,from,till,allowEmpty=false){const matches=state.csv.rows.filter(r=>r.date>=from&&r.date<=till);if(!matches.length&&!allowEmpty)throw Error('CSV tidak memiliki data dalam periode.');const matched=matches.filter(r=>r.tag===s.toUpperCase()&&r.id);if(!matched.length&&!allowEmpty)throw Error('Tidak ada Tag_link1 yang cocok dengan source dalam periode.');const map=new Map();for(const r of matched)map.set(r.id,(map.get(r.id)||0)+r.commission);return {map,matched:matched.length,inPeriod:matches.length};}
-function calculate(rows,map,fx){const arr=rows.map(s=>{const cost=s.spent*fx,comm=map.get(s.id)||0,profit=comm-cost,roi=cost===0?null:profit/cost*100,ctr=s.impressions?100*s.clicks/s.impressions:null,cpm=s.impressions?1000*s.spent/s.impressions:null;return {...s,cost,comm,profit,roi,ctr,cpm:state.provider==='clickadu'?s.cpm:cpm,candidate:cost>=1000&&(state.provider==='adsterra'?!(roi!==null&&roi>10&&ctr!==null&&ctr>8):roi!==null&&roi<30),enough:cost>=1000}});arr.sort((a,b)=>b.spent-a.spent||a.id.localeCompare(b.id));return arr;}
+function calculate(rows,map,fx){const arr=rows.map(s=>{const cost=s.spent*fx,comm=map.get(s.id)||0,profit=comm-cost,roi=cost===0?null:profit/cost*100,ctr=s.impressions?100*s.clicks/s.impressions:null,cpm=s.impressions?1000*s.spent/s.impressions:null;const row={...s,cost,comm,profit,roi,ctr,cpm:state.provider==='clickadu'?s.cpm:cpm,enough:cost>=1000};return {...row,candidate:listDecision(row)==='BLACKLIST'};});arr.sort((a,b)=>b.spent-a.spent||a.id.localeCompare(b.id));return arr;}
 function sumStats(rows){const sum=(k)=>rows.reduce((n,r)=>n+(Number(r[k])||0),0);const spend=sum('spent'),cost=sum('cost'),comm=sum('comm'),profit=sum('profit');return{spend,cost,comm,profit,roi:cost===0?null:profit/cost*100,clicks:sum('clicks'),impressions:sum('impressions'),candidate:rows.filter(r=>r.candidate).length};}
 async function runAction(title,fn){if(state.busy)return;busy(true,title);try{const out=await fn();if(out!==false)log(title+' selesai.','ok');return out;}catch(e){log(title+': '+safeError(e),'error');showToast(safeError(e),'error');return null;}finally{busy(false);}}
 async function analyze(){return runAction('Analisis',async()=>{const c=requireSetup(true);const stats=await getStats(c.campaign,c.from,c.till);if(!stats.length)throw Error('Statistik provider kosong pada periode ini.');const com=commissions(c.source,c.from,c.till);state.rows=calculate(stats,com.map,c.fx);state.analysis={setup:{...c,token:undefined},commissionMatches:com.matched,commissionPeriod:com.inPeriod,totals:sumStats(state.rows)};state.candidates=state.rows.filter(r=>r.candidate).map(r=>r.id);state.page=1;state.blocked=null;state.campaignStatus=null;state.bids=state.provider==='adsterra'?await getBids():null;$('dailyCard').hidden=true;render();log(`Data ${state.rows.length} ${state.provider==='adsterra'?'Placement':'Zone'}, ${com.matched} baris komisi cocok, ${state.candidates.length} kandidat blacklist.`,'ok');showToast('Analisis berhasil dan Custom Bid (jika Adsterra) sudah dibaca.','ok');return true;});}
@@ -137,23 +143,43 @@ async function readProvider(){return runAction('Muat status provider',async()=>{
 function adsterraBidPath(){return endpoint('custom_bid.json')}
 async function writeBid(id,isDelete){if(state.provider!=='adsterra'||!state.analysis||state.busy)return;const input=[...document.querySelectorAll('[data-bid]')].find(x=>x.dataset.bid===id);const val=input?.value?.trim();let price;if(!isDelete){if(!/^\d+(?:\.\d+)?$/.test(val||''))return showToast('Masukkan harga bid dalam angka 0–200.','error');price=Number(val);if(!Number.isFinite(price)||price<0||price>200)return showToast('Harga Custom Bid harus 0–200.','error');}
  const current=priceFor(id,'ID');if(isDelete&&current===null)return showToast('Bid ID sudah kosong.');if(!isDelete&&current!==null&&price===current)return showToast('Harga tidak berubah.');const action=isDelete?'HAPUS':current===null?'BUAT':'EDIT';
- if(!await confirmDialog(`${action} Custom Bid Adsterra`,`Campaign: ${requireSetup().campaign}\nPlacement: ${id}\nGEO: ID\n${isDelete?'Hapus override harga khusus.':`Harga baru: $${price}`}\n\nIni akan mengubah data Adsterra sungguhan.`,true))return;
+ if(!window.confirm(`${action} Custom Bid Adsterra\nCampaign: ${requireSetup().campaign}\nPlacement: ${id}\nGEO: ID\n${isDelete?'Hapus override harga khusus.':`Harga baru: $${price}`}\nIni mengubah data Adsterra sungguhan.`))return;
  return runAction(`${action} Custom Bid`,async()=>{
-  const before=await getBids();const actualOld=before.find(b=>b.placement===id&&b.geo==='ID');if((actualOld===undefined)!==(current===null)||(actualOld!==undefined&&current!==null&&Number(actualOld.price)!==Number(current)))throw Error('Custom Bid sudah berubah di provider. Muat analisis ulang.');
-  if(!isDelete){const blocked=await getBlocked();if(blocked.includes(id))throw Error('Placement sedang blacklist, Simpan ditolak.');}
-  const item={placement_id:Number(id),country_code:'ID'};const method=isDelete?'DELETE':current===null?'POST':'PATCH';const payload={custom_bids:[isDelete?item:{...item,price}]};let error=null,providerResponse=null;
-  try{providerResponse=await api(method,adsterraBidPath(),payload);}catch(e){error=e;}
-  const after=await getBids();const found=after.find(b=>b.placement===id&&b.geo==='ID');const expected=before.filter(b=>!(b.placement===id&&b.geo==='ID'));if(!isDelete)expected.push({placement:id,geo:'ID',price});const matching=bidsEqual(after,expected);
-  if(!isDelete){const nowBlocked=await getBlocked();if(nowBlocked.includes(id)){
-   // No automatic restore of any bid; clean up target/all currently blocked GEOs.
-   const all=after.filter(b=>nowBlocked.includes(b.placement));if(all.length){try{await api('DELETE',adsterraBidPath(),{custom_bids:all.map(b=>({placement_id:Number(b.placement),country_code:b.geo}))})}catch{}}
-   state.bids=await getBids();renderRows();throw Error('Blacklist berubah ketika menyimpan. Bid Placement blacklist diperiksa/reset; harap verifikasi Adsterra.');
-  }}
-  state.bids=after;renderRows();if(error)throw Error('Write mungkin telah terjadi tetapi statusnya tidak pasti. '+safeError(error)+' Periksa Adsterra, jangan ulang otomatis.');if(!matching)throw Error('Verifikasi tidak cocok: bid lain mungkin berubah. Tidak ada restore otomatis. Cek Adsterra.');
-  if(method==='POST'){try{const response=parseAdsterraBids(providerResponse);if(!bidsEqual(response,expected))throw Error('POST response mismatch');}catch{throw Error('POST berhasil terlihat pada GET, tetapi respons create belum terverifikasi sepenuhnya. Periksa provider.');}}
-  showToast(`${action} Custom Bid berhasil dan diverifikasi.`, 'ok');return true;
+  const ctx=operationContext(activeConfig(),{analysis:true});listOperation=ctx;
+  try{
+   strictListIds([id]);
+   const before=await ctx.bids(),actualOld=before.find(b=>b.placement===id&&b.geo==='ID');
+   if((actualOld===undefined)!==(current===null)||(actualOld!==undefined&&current!==null&&Number(actualOld.price)!==Number(current)))throw Error('Custom Bid berubah di provider. Muat analisis ulang.');
+   if(!isDelete)assertBidAllowed((await ctx.snapshot()).blacklist,id);
+   const item={placement_id:Number(id),country_code:'ID'},method=isDelete?'DELETE':current===null?'POST':'PATCH';
+   const expected=before.filter(b=>!(b.placement===id&&b.geo==='ID'));if(!isDelete)expected.push({placement:id,geo:'ID',price});
+   if(!bidsEqual(before,await ctx.bids()))throw Error('Custom Bid berubah sebelum write.');
+   if(!isDelete)assertBidAllowed((await ctx.snapshot()).blacklist,id);
+   // Keep single-item create/edit/delete. Never send an old full snapshot.
+   let response;const request=ctx.write;
+   // The response collection is needed only for POST proof; use the same bounded
+   // transport and in-flight coordination as all other campaign writes.
+   ctx.captureResponse=true;
+   const error=await request(method,adsterraBidPath(),{custom_bids:[isDelete?item:{...item,price}]},12);
+   response=ctx.lastResponse;
+   const after=await ctx.bids();state.bids=after;renderRows();
+   if(!isDelete){
+    const blocked=(await ctx.snapshot()).blacklist;
+    if(Array.isArray(blocked)&&blocked.includes(id)){
+     const reset=after.filter(b=>blocked.includes(b.placement));
+     if(reset.length)await ctx.write('DELETE',adsterraBidPath(),{custom_bids:reset.map(b=>({placement_id:Number(b.placement),country_code:b.geo}))},5);
+     state.bids=await ctx.bids();renderRows();throw Error('Blacklist berubah ketika Simpan. Bid blacklist diperiksa/reset; tidak dipulihkan.');
+    }
+    assertBidAllowed(blocked,id);
+   }
+   if(!bidsEqual(after,expected))throw Error('Verifikasi bid tidak cocok. Tidak ada pemulihan massal otomatis.');
+   if(method==='POST')try{if(!bidsEqual(parseAdsterraBids(response),expected))throw Error('POST response mismatch');}
+    catch{ctx.method.uncertain=true;throw Error('GET sesuai tetapi respons create belum terbukti lengkap; write berikutnya ditahan pada sesi ini.');}
+   if(error)throw Error('Request ditolak; GET terbaru sesuai, penyebab perubahan tidak diasumsikan. '+safeError(error));
+   showToast(`${action} Custom Bid berhasil dan diverifikasi.`,'ok');return true;
+  }finally{if(listOperation===ctx)listOperation=null;}
  });}
-const CLICK_FIELDS=['name','direction','frequency','capping','impFrequency','impCapping','freqCapType','status','rateModel','feed','targetUrl','rates','dailyAmount','totalAmount','evenlyLimitsUsage','impressionsLimit','impressionsLimitEnabled','budgetLimit','isAdblockBuy','isDsp','startedAt','skipOffset','trafficVertical','pushNotificationTitle','pushNotificationDescription','pushNotificationIcon','allowInPage','allowOnlyInPage','video'];
+const CLICK_FIELDS=['name','direction','frequency','capping','impFrequency','impCapping','freqCapType','status','rateModel','feed','targetUrl','rates','dailyAmount','totalAmount','evenlyLimitsUsage','impressionsLimit','impressionsLimitEnabled','budgetLimit','isAdblockBuy','isDsp','startedAt','skipOffset','trafficVertical','pushNotificationTitle','pushNotificationDescription','pushNotificationIcon','pushNotificationCreative','cohort','allowInPage','allowOnlyInPage','video'];
 async function replaceBlacklist(){return applyPlacementList();}
 async function resetBlacklistedBids(target){const before=await getBids();let b=await getBlocked();if(!equalSet(target,b))throw Error('Blacklist berubah sebelum reset bid.');const entries=before.filter(x=>target.includes(x.placement)).map(b=>({placement_id:Number(b.placement),country_code:b.geo}));if(entries.length){try{await api('DELETE',adsterraBidPath(),{custom_bids:entries})}catch{/* no retry */}}
  const after=await getBids();b=await getBlocked();if(!equalSet(target,b))throw Error('Blacklist berubah selama reset bid.');const pending=[...new Set(after.filter(x=>target.includes(x.placement)).map(x=>x.placement))];return {bids:after,pending};}
@@ -187,7 +213,7 @@ function start(){const today=dateTodayID();const yesterday=new Date(Date.parse(t
  renderProvider();switchTab('campaign');
 }
 function setProvider(p){if(p===state.provider||state.busy||!['clickadu','adsterra'].includes(p))return;
- capture();state.provider=p;state.analysis=null;state.rows=[];state.candidates=[];state.bids=null;state.blocked=null;state.campaignStatus=null;state.page=1;
+ capture();clearListRejection();state.provider=p;state.analysis=null;state.rows=[];state.candidates=[];state.bids=null;state.blocked=null;state.campaignStatus=null;state.page=1;
  $('results').classList.add('hidden');notice('');renderProvider();switchTab('campaign');
 }
 function renderProvider(){
@@ -220,45 +246,48 @@ function renderProvider(){
  $('analyze').disabled=!(isConnected()&&configs.length);
  $('fileInfo').textContent=state.csv?`${state.csv.name} · ${fmtN(state.csv.rows.length,0)} baris CSV`:'Gunakan CSV Shopee dengan periode yang sama.';
  $('results').classList.toggle('hidden',!state.analysis);
- $('analysisMethod').textContent=activeConfig()?'Metode tujuan dari Campaign: '+listName(selectedListKind())+'. Aktual hanya berdasarkan GET provider.':'';
+ renderPlacementMethod();
  renderConfigs();renderCampaignTable();if(state.analysis)render();
 }
-function capture(){const s=session();for(const k of ['token','campaign','source','from','till','fx'])s[k]=$(k).value;}
+function capture(){const s=session();for(const k of ['campaign','source','from','till','fx'])s[k]=$(k).value;}
 function renderConfigs(){const list=allConfigs();$('configList').innerHTML=list.length?list.map(c=>`<div class="config-card"><div><strong>${escapeHtml(c.label||c.id)}</strong><small>Campaign ID: ${escapeHtml(c.id)} · Tag_link1: ${escapeHtml(c.source)}</small><small>Terakhir Replace Blacklist: ${c.lastReplace?escapeHtml(c.lastReplace):'Belum pernah pada sesi ini'}</small></div><div class="actions"><button class="btn ghost small" type="button" data-edit="${escapeHtml(c.id)}">Edit</button><button class="btn ghost small" type="button" data-remove="${escapeHtml(c.id)}">Hapus</button></div></div>`).join(''):`<p class="tip">Belum ada campaign ${state.provider==='adsterra'?'Adsterra':'Clickadu'}.</p>`;}
 function resetConfigEdit(){editingConfig=null;$('configForm').reset();$('saveConfig').textContent='Tambah Config';$('cancelEdit').classList.add('hidden');}
 function saveConfig(e){e.preventDefault();if(state.busy)return;const id=$('newId').value.trim(),label=$('newLabel').value.trim(),source=$('newSource').value.trim();
  if(!/^[\w-]+$/.test(id)||(state.provider==='adsterra'&&!/^[1-9]\d*$/.test(id)))return showToast('Campaign ID tidak valid.','error');
+ if(state.provider==='adsterra')try{canonicalCampaign(id);}catch{return showToast('Campaign ID Adsterra di luar batas yang didukung.','error');}
  if(!source)return showToast('Tag Link 1 wajib diisi.','error');if(id.length>80||label.length>120||source.length>120)return showToast('Konfigurasi terlalu panjang.','error');
  const configs=allConfigs();if(configs.some(c=>c.id===id&&c.id!==editingConfig))return showToast('Campaign ID sudah terdaftar.','error');
  if(editingConfig){const original=configs.find(c=>c.id===editingConfig);if(!original)return;original.listEvidence=null;original.listError='';original.id=id;original.label=label;original.source=source;if(session().campaign===editingConfig)session().campaign=id;
   reportsByProvider[state.provider].delete(editingConfig);if(state.analysis){state.analysis=null;$('results').classList.add('hidden');}
- }else configs.push({id,label,source,lastReplace:null,listMethod:'BLACKLIST'});
- resetConfigEdit();renderProvider();showToast('Konfigurasi campaign berhasil disimpan dalam sesi.','ok');
+ }else configs.push({id,label,source,lastReplace:null,listMethod:null});
+ invalidateAnalysis();resetConfigEdit();renderProvider();showToast('Konfigurasi campaign berhasil disimpan dalam sesi.','ok');
 }
 function editConfig(id){const c=allConfigs().find(x=>x.id===id);if(!c)return;editingConfig=id;$('newId').value=c.id;$('newLabel').value=c.label;$('newSource').value=c.source;$('saveConfig').textContent='Simpan Perubahan';$('cancelEdit').classList.remove('hidden');}
 async function removeConfig(id){if(state.busy)return;const c=allConfigs().find(x=>x.id===id);if(!c)return;
  if(!await confirmDialog('Hapus config?',`Konfigurasi ${c.label||c.id} akan dihapus dari sesi browser saja, bukan dari provider.`,false))return;
- session().configs=allConfigs().filter(x=>x.id!==id);reportsByProvider[state.provider].delete(id);
+ clearListRejection();session().configs=allConfigs().filter(x=>x.id!==id);reportsByProvider[state.provider].delete(id);
  if(session().campaign===id)session().campaign='';if(state.analysis){state.analysis=null;$('results').classList.add('hidden');}if(editingConfig===id)resetConfigEdit();renderProvider();
 }
 function saveConnection(){const val=$('token').value.trim();if(!val)return showToast('Masukkan token API terlebih dahulu.','error');if(val.length>4096)return showToast('Token terlalu panjang.','error');if(val!==session().token){invalidateAnalysis();session().statuses={};for(const c of allConfigs()){c.listEvidence=null;c.listError='';}reportsByProvider[state.provider].clear();}session().token=val;renderProvider();showToast('Koneksi tersedia selama sesi browser ini.','ok');}
 async function disconnectConnection(){if(!isConnected())return;if(!await confirmDialog('Putuskan koneksi?',`Token ${state.provider} akan dihapus dari halaman saat ini.`,false))return;
- session().token='';$('token').value='';state.bids=null;state.analysis=null;state.rows=[];state.candidates=[];state.blocked=null;state.campaignStatus=null;reportsByProvider[state.provider].clear();renderProvider();}
-function busy(on,info='Memproses ...'){state.busy=on;
+ clearListRejection();session().token='';$('token').value='';state.bids=null;state.analysis=null;state.rows=[];state.candidates=[];state.blocked=null;state.campaignStatus=null;reportsByProvider[state.provider].clear();renderProvider();}
+function busy(on,info='Memproses ...'){state.mainBusy=on;syncBusyUi(info);}
+function syncBusyUi(info='Memproses ...'){const on=Boolean(state.mainBusy||state.safetyPending);state.busy=on;
  for(const id of ['analyze','replaceBlacklist','refreshStatuses','syncCampaign','saveToken','disconnectToken','saveConfig','campaign','from','till','fx','csvFile','token']){const e=$(id);if(e)e.disabled=on;}
  document.querySelectorAll('[data-provider],[data-tab],[data-list-method],[data-edit],[data-remove]').forEach(e=>e.disabled=on);
  $('analyze').innerHTML=on?`<span class="spinner"></span> ${escapeHtml(info)}`:'Analisa';
- if(!on){$('analyze').disabled=!isConnected()||!allConfigs().length;renderCampaignTable();}
+ if(!on)$('analyze').disabled=!isConnected()||!allConfigs().length;
+ renderCampaignTable();renderPlacementMethod();renderListRejection();
 }
-function invalidateAnalysis(){if(!state.analysis)return;state.analysis=null;state.rows=[];state.candidates=[];state.bids=null;state.blocked=null;$('results').classList.add('hidden');notice('');}
+function invalidateAnalysis(){clearListRejection();state.analysis=null;state.rows=[];state.candidates=[];state.bids=null;state.blocked=null;$('results').classList.add('hidden');notice('');}
 function markAnalysisResult(){const c=activeConfig(),a=state.analysis,ad=state.provider==='adsterra';if(!a)return;
  $('analysisInfo').innerHTML=`<span>Campaign: <b>${escapeHtml(c?.label||a.setup.campaign)}</b></span><span>Shopee Account: <b>Sesi sementara</b></span><span>Tag Link 1: <b>${escapeHtml(a.setup.source)}</b></span><span>Periode: <b>${escapeHtml(a.setup.from)} – ${escapeHtml(a.setup.till)}</b></span><span>Kurs: <b>${money(a.setup.fx)} / USD</b></span><span>Terakhir Replace Blacklist: <b>${escapeHtml(c?.lastReplace||'Belum pernah pada sesi ini')}</b></span>`;
- $('policyMessage').innerHTML=ad?`<b>Aturan Kandidat Blacklist</b><div>Placement AMAN hanya jika ROI &gt; 10% dan CTR &gt; 8%. Dengan Biaya Iklan ≥ Rp1.000, kegagalan salah satu syarat menjadikannya kandidat blacklist pada periode analisis. CTR dihitung dari klik / impresi × 100; impresi nol tidak memenuhi syarat CTR.</div><div>Placement lainnya akan dikeluarkan dari blacklist.</div>`:`<b>Aturan Kandidat Blacklist</b><div>Zone menjadi Kandidat Blacklist jika Biaya Iklan ≥ Rp1.000 dan ROI &lt; 30%.</div><div>Zone dengan biaya di bawah Rp1.000 belum cukup spend untuk keputusan.</div><div>Blacklist hanya berubah setelah konfirmasi eksplisit. Operasi mengganti daftar lama secara penuh.</div>`;
+ $('policyMessage').innerHTML=ad?`<b>Aturan Kandidat Blacklist</b><div>Biaya ≥Rp1.000 dan ROI valid. Aman jika ROI ≥20% ATAU (ROI &gt;10% DAN CTR &gt;8%). Impresi nol yang valid tetap dapat aman melalui ROI ≥20%; data invalid tidak lolos.</div>`:`<b>Aturan Kandidat Blacklist</b><div>Zone menjadi Kandidat Blacklist jika Biaya Iklan ≥ Rp1.000 dan ROI &lt; 30%.</div><div>Zone dengan biaya di bawah Rp1.000 belum cukup spend untuk keputusan.</div><div>Blacklist hanya berubah setelah konfirmasi eksplisit. Operasi mengganti daftar lama secara penuh.</div>`;
  $('replacePolicy').textContent=ad?'Replace menghitung ulang analisis, mengganti blacklist secara penuh, kemudian memverifikasi daftar final dan menghapus semua Custom Bid GEO pada Placement blacklist. Placement yang ON kembali tidak mendapat bid lama.':'Replace menghitung ulang analisis, mengganti blacklist secara penuh, lalu memverifikasi daftar final.';
  const kind=a.listKind||'BLACKLIST';
  if(kind==='WHITELIST'){
-  $('policyMessage').textContent=ad?'Kandidat Whitelist: biaya ≥Rp1.000 DAN ROI >10% DAN CTR >8%. Nilai unknown tidak lolos.':'Kandidat Whitelist: biaya ≥Rp1.000 DAN ROI ≥30%. Nilai unknown tidak lolos.';
-  $('replacePolicy').textContent=ad?'Whitelist mengganti daftar final dan mempertahankan Custom Bid. Clear daftar lawan hanya setelah konfirmasi serta INACTIVE terverifikasi.':'Satu PUT mengganti metode dan daftar final. Whitelist wajib nonkosong.';
+  $('policyMessage').textContent=ad?'Kandidat Whitelist: biaya ≥Rp1.000 DAN (ROI ≥20% ATAU (ROI >10% DAN CTR >8%)). Impresi nol valid boleh lewat ROI ≥20%; nilai unknown tidak lolos.':'Kandidat Whitelist: biaya ≥Rp1.000 DAN ROI ≥30%. Nilai unknown tidak lolos.';
+  $('replacePolicy').textContent=ad?'Whitelist mengganti daftar final dan mempertahankan Custom Bid. Metode ditetapkan di Campaign; Placement tidak melakukan clear.':'Satu PUT mengganti metode dan daftar final. Whitelist wajib nonkosong.';
  }
  $('replaceBlacklist').textContent='Terapkan '+listName(kind);
  $('candidateTitle').textContent='Kandidat '+listName(kind)+(ad?' Placement':' Zone');
@@ -267,7 +296,7 @@ function markAnalysisResult(){const c=activeConfig(),a=state.analysis,ad=state.p
 }
 function render(){if(!state.analysis)return;
  $('results').classList.remove('hidden');const t=state.analysis.totals,ad=state.provider==='adsterra';
- const metrics=[['Biaya Iklan',money(t.cost),usd(t.spend)],['Komisi Bersih Shopee',money(t.comm),''],['Profit',money(t.profit),''],['ROI',pct(t.roi),''],['Klik Iklan',fmtN(t.clicks,0),''],['Kandidat '+listName(state.analysis.listKind),String(state.candidates.length),ad?'Biaya ≥ Rp1.000; aman: ROI >10% DAN CTR >8%':'Biaya ≥ Rp1.000; aman: ROI ≥30%']];
+ const metrics=[['Biaya Iklan',money(t.cost),usd(t.spend)],['Komisi Bersih Shopee',money(t.comm),''],['Profit',money(t.profit),''],['ROI',pct(t.roi),''],['Klik Iklan',fmtN(t.clicks,0),''],['Kandidat '+listName(state.analysis.listKind),String(state.candidates.length),ad?'Biaya ≥Rp1.000; aman: ROI ≥20% ATAU (ROI >10% DAN CTR >8%)':'Biaya ≥ Rp1.000; aman: ROI ≥30%']];
  $('stats').innerHTML=metrics.map(([title,value,detail],i)=>`<div class="metric"><span>${escapeHtml(title)}</span><b class="${i===2?(t.profit<0?'red':'green'):''}">${escapeHtml(value)}</b>${detail?`<small>${escapeHtml(detail)}</small>`:''}</div>`).join('');
  $('thead').innerHTML=ad?'<tr><th>Placement</th><th>Spend USD</th><th>Spend IDR</th><th>Komisi</th><th>Profit</th><th>ROI</th><th>CTR</th><th>Custom Bid (ID / GLOBAL)</th><th>CPM (USD)</th><th>Status</th></tr>':'<tr><th>Zone</th><th>Impressions</th><th>Clicks</th><th>Spend USD</th><th>Cost IDR</th><th>Komisi</th><th>Profit</th><th>ROI</th><th>Status</th></tr>';
  markAnalysisResult();renderRows();
@@ -276,7 +305,7 @@ function renderRows(){if(!state.analysis)return;const rows=state.rows,size=Numbe
  const pages=Math.max(1,Math.ceil(rows.length/size));state.page=Math.min(Math.max(1,state.page),pages);
  const view=rows.slice((state.page-1)*size,state.page*size),ad=state.provider==='adsterra';
  $('tbody').innerHTML=view.length?view.map(r=>{
-  const status=state.analysis.listKind==='WHITELIST'?(listCandidates([r],'WHITELIST').length?'<span class="status good">Kandidat Whitelist</span>':r.enough?'<span class="status muted">Bukan Kandidat Whitelist</span>':'<span class="status low">Belum Cukup Spend</span>'):r.candidate?'<span class="status bad">Kandidat Blacklist</span>':r.enough?'<span class="status good">Aman</span>':'<span class="status low">Belum Cukup Spend</span>';
+  const labelStatus=state.analysis.excluded?.includes(r.id)?'Dikecualikan (penolakan)':listRowLabel(r,state.analysis.listKind),status=`<span class="status ${listCandidates([r],state.analysis.listKind).length?(state.analysis.listKind==='BLACKLIST'?'bad':'good'):'low'}">${escapeHtml(labelStatus)}</span>`;
   const profit=`<td class="${r.profit<0?'red':'green'}">${money(r.profit)}</td>`;
   if(!ad)return `<tr><td><b>${escapeHtml(r.id)}</b></td><td>${fmtN(r.impressions,0)}</td><td>${fmtN(r.clicks,0)}</td><td>${usd(r.spent)}</td><td>${money(r.cost)}</td><td>${money(r.comm)}</td>${profit}<td>${pct(r.roi)}</td><td>${status}</td></tr>`;
   const idPrice=priceFor(r.id,'ID'),globalPrice=priceFor(r.id,'GLOBAL');
@@ -293,12 +322,15 @@ function renderRows(){if(!state.analysis)return;const rows=state.rows,size=Numbe
   b.disabled=state.busy||!newVal||(old!==null&&newVal===String(old));
  }));
 }
-async function analyze(){notice('');if(!activeConfig())return showToast('Pilih campaign di form Analisa terlebih dahulu.','error');
+async function analyze(){notice('');clearListRejection();if(!activeConfig())return showToast('Pilih campaign di form Analisa terlebih dahulu.','error');
  if(!isConnected())return showToast('Masukkan token pada Pengaturan.','error');
- const success=await runAction('Analisis',async()=>{const c=requireSetup(true);const stats=await getStats(c.campaign,c.from,c.till);
+ const success=await runAction('Analisis',async()=>{const c=requireSetup(true);
+  if(state.provider==='clickadu'&&!selectedListKind())await refreshConfigLists(activeConfig());
+  if(!selectedListKind())throw Error('Pilih metode pada Campaign terlebih dahulu; metode aktual Clickadu harus berhasil dibaca.');
+  const stats=await getStats(c.campaign,c.from,c.till);
   if(!stats.length)throw Error('Statistik provider kosong pada periode ini.');
   const com=commissions(c.source,c.from,c.till);state.rows=calculate(stats,com.map,c.fx);state.page=1;
-  state.analysis={setup:{...c,token:undefined},commissionMatches:com.matched,commissionPeriod:com.inPeriod,totals:sumStats(state.rows),listKind:selectedListKind()};
+  state.analysis={setup:{...c,token:undefined},commissionMatches:com.matched,commissionPeriod:com.inPeriod,totals:sumStats(state.rows),listKind:selectedListKind(),methodVersion:state.provider==='adsterra'?campaignMethod().version:null};
   state.candidates=listCandidates(state.rows);
   state.blocked=null;state.campaignStatus=null;state.bids=null;
   if(state.provider==='adsterra'){try{state.bids=await getBids();}catch{state.bids=null;}}
@@ -310,35 +342,25 @@ function renderCampaignTable(){const ad=state.provider==='adsterra',cfgs=allConf
  $('campaignTableHead').innerHTML=ad?'<tr><th>Campaign</th><th>Campaign ID</th><th>Tag_link1</th><th>Status</th><th>Metode tujuan</th><th>Auto ON/OFF</th><th>Manual</th></tr>':'<tr><th>Campaign</th><th>Campaign ID</th><th>Tag_link1</th><th>Metode tujuan</th></tr>';
  $('campaignTableBody').innerHTML=cfgs.length?cfgs.map(c=>{
   const st=status[c.id];const color=st==='ON'?'green':st==='OFF'?'muted':'warntext';
-  return `<tr><td><button class="textlink" type="button" data-history="${escapeHtml(c.id)}">${escapeHtml(c.label||c.id)}</button></td><td>${escapeHtml(c.id)}</td><td>${escapeHtml(c.source)}</td>${ad?`<td><span class="${color}">${escapeHtml(st==='ON'?'Active':st==='OFF'?'Inactive':st==='LIMITED'?'Limit':st==='NOT IN USE'?'Not in use':st||'Belum dimuat')}</span></td>${`<td style="white-space:normal;min-width:220px"><select data-list-method="${escapeHtml(c.id)}" aria-label="Metode tujuan ${escapeHtml(c.label||c.id)}" ${state.busy?'disabled':''}><option value="BLACKLIST" ${(c.listMethod||'BLACKLIST')==='BLACKLIST'?'selected':''}>Blacklist</option><option value="WHITELIST" ${c.listMethod==='WHITELIST'?'selected':''}>Whitelist</option></select><p class="tip">${escapeHtml(listEvidenceText(c))}</p></td>`}<td><label class="checklabel"><input type="checkbox" disabled aria-label="Auto ON OFF tidak tersedia tanpa scheduler"> <span class="tinyhint">Tidak tersedia dalam sesi</span></label></td><td>${st==='ON'||st==='OFF'||st==='LIMITED'?`<button type="button" class="power ${st==='OFF'?'off':''}" data-toggle="${escapeHtml(c.id)}" title="${st==='OFF'?'Aktifkan':'Matikan'} campaign">⏻</button>`:'<span class="muted">—</span>'}</td>`:`<td style="white-space:normal;min-width:220px"><select data-list-method="${escapeHtml(c.id)}" aria-label="Metode tujuan ${escapeHtml(c.label||c.id)}" ${state.busy?'disabled':''}><option value="BLACKLIST" ${(c.listMethod||'BLACKLIST')==='BLACKLIST'?'selected':''}>Blacklist</option><option value="WHITELIST" ${c.listMethod==='WHITELIST'?'selected':''}>Whitelist</option></select><p class="tip">${escapeHtml(listEvidenceText(c))}</p></td>`}</tr>`;
+  const method=ad?campaignMethod(c).method:c.listMethod||'',uncertain=ad&&campaignMethod(c).uncertain;
+  const selector=`<td style="white-space:normal;min-width:220px"><select data-list-method="${escapeHtml(c.id)}" aria-label="Metode ${escapeHtml(c.label||c.id)}" ${state.busy?'disabled':''}><option value="" ${!method?'selected':''}>${ad?'Belum dipilih':'Ikuti aktual GET'}</option><option value="BLACKLIST" ${method==='BLACKLIST'?'selected':''}>Blacklist</option><option value="WHITELIST" ${method==='WHITELIST'?'selected':''}>Whitelist</option></select><p class="tip">${escapeHtml(listEvidenceText(c))}</p></td>`;
+  const power=['ON','OFF','LIMITED'].includes(st)?`<button type="button" class="power ${st==='OFF'?'off':''}" data-toggle="${escapeHtml(c.id)}" ${state.safetyPending||st==='OFF'&&state.busy?'disabled':''} title="${st==='OFF'?'Aktifkan':'Matikan'} campaign">⏻</button>`:'<span class="muted">—</span>';
+  const protective=ad&&(uncertain||state.mainBusy)?`<button type="button" class="btn outline small" data-protective-off="${escapeHtml(c.id)}" ${state.safetyPending?'disabled':''}>OFF</button>`:'';
+  return `<tr><td><button class="textlink" type="button" data-history="${escapeHtml(c.id)}">${escapeHtml(c.label||c.id)}</button></td><td>${escapeHtml(c.id)}</td><td>${escapeHtml(c.source)}</td>${ad?`<td><span class="${color}">${escapeHtml(st==='ON'?'Active':st==='OFF'?'Inactive':st==='LIMITED'?'Limit':st==='NOT IN USE'?'Not in use':st||'Belum dimuat')}</span></td>${selector}<td><label class="checklabel"><input type="checkbox" disabled aria-label="Auto ON OFF tidak tersedia tanpa scheduler"> <span class="tinyhint">Tidak tersedia dalam sesi</span></label></td><td>${power}${protective}</td>`:selector}</tr>`;
  }).join(''):`<tr><td colspan="${ad?7:4}" class="empty">Belum ada campaign ${ad?'Adsterra':'Clickadu'}. Tambahkan di tab Pengaturan.</td></tr>`;
  const haveToken=isConnected(),haveConfigs=cfgs.length>0;
  $('refreshStatuses').disabled=!haveToken||!haveConfigs||state.busy;
  $('syncCampaign').disabled=!haveToken||!haveConfigs||state.busy;
- $('campaignNotice').classList.toggle('hidden',haveConfigs&&haveToken);
- $('campaignNotice').textContent=!haveToken?'Koneksi belum dikonfigurasi. Buka Pengaturan untuk memasukkan token.':!haveConfigs?'Tambahkan campaign pada Pengaturan untuk melihat laporan harian.':'';
+ if(!haveToken||!haveConfigs)notice(!haveToken?'Koneksi belum dikonfigurasi. Buka Pengaturan untuk memasukkan token.':'Tambahkan campaign pada Pengaturan untuk melihat laporan harian.','notice','campaignNotice');
 }
 async function readStatuses(){if(state.busy)return;
  await runAction('Membaca campaign dan daftar',async()=>{
   session().statuses??={};
-  for(const c of allConfigs()){await refreshConfigLists(c);
-   if(state.provider==='adsterra')session().statuses[c.id]=c.listEvidence?({1:'OFF',2:'LIMITED',3:'ON',4:'NOT IN USE'})[c.listEvidence.campaign.active]:'Gagal dimuat';
-  }renderCampaignTable();return true;
+  for(const c of allConfigs())await refreshConfigLists(c);
+  renderCampaignTable();renderPlacementMethod();return true;
  });}
 
-async function toggleCampaignFor(id){if(state.busy||state.provider!=='adsterra')return;
- const cfg=allConfigs().find(c=>c.id===id);if(!cfg)return;
- const old=session().statuses?.[id];if(!['ON','OFF','LIMITED'].includes(old))return showToast('Muat status campaign terlebih dahulu.','error');
- const desired=old==='OFF',action=desired?'Aktifkan':'Matikan';
- if(!await confirmDialog(`${action} campaign?`,`Campaign ${cfg.label||cfg.id} akan ${desired?'diaktifkan':'dinonaktifkan'} di Adsterra sungguhan.`,!desired))return;
- await runAction(`Ubah status ${cfg.id}`,async()=>{
- let ambiguous=false;try{await api('PATCH',`/advertiser/campaign/${id}.json`,{active:desired});}catch(e){ambiguous=true;}
- let actual='';for(let a=0;a<3;a++){const d=await api('GET',`/advertiser/campaign/${id}.json`);actual=({1:'OFF',2:'LIMITED',3:'ON',4:'NOT IN USE'})[d?.active];if(actual===(desired?'ON':'OFF'))break;if(a<2)await sleep(a?1000:500);}
- session().statuses??={};session().statuses[id]=actual||'Gagal dimuat';renderCampaignTable();
- if(actual!==(desired?'ON':'OFF'))throw Error(`Status belum sesuai: ${actual||'tidak diketahui'}. ${ambiguous?'PATCH mungkin sudah diproses; cek provider.':''}`);
- showToast(`Status ${cfg.label||cfg.id} berhasil diverifikasi: ${actual==='ON'?'Active':'Inactive'}.`,'ok');return true;
- });
-}
+async function toggleCampaignFor(id){return changeAdsterraStatus(id);}
 async function syncCampaigns(){if(state.busy)return;
  if(!state.csv)return showToast('Upload CSV Shopee di tab Placement/Zone terlebih dahulu.','error');
  const configs=allConfigs(),from=$('from').value,till=$('till').value,fx=Number($('fx').value);
@@ -369,20 +391,22 @@ function bind(){
  document.querySelectorAll('[data-provider]').forEach(b=>b.addEventListener('click',()=>setProvider(b.dataset.provider)));
  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
  $('analysisForm').addEventListener('submit',e=>{e.preventDefault();capture();void analyze();});
- $('campaign').addEventListener('change',()=>{const c=activeConfig();$('source').value=c?.source||'';$('analysisMethod').textContent=c?'Metode tujuan dari Campaign: '+listName(selectedListKind()):'';capture();state.analysis=null;state.bids=null;state.blocked=null;state.rows=[];state.candidates=[];$('results').classList.add('hidden');notice('');});
+ $('campaign').addEventListener('change',()=>{const c=activeConfig();$('source').value=c?.source||'';capture();invalidateAnalysis();renderPlacementMethod();});
  for(const k of ['from','till','fx'])$(k).addEventListener('input',()=>{capture();invalidateAnalysis();});
  $('saveToken').addEventListener('click',saveConnection);
  $('disconnectToken').addEventListener('click',()=>void disconnectConnection());
  $('configForm').addEventListener('submit',saveConfig);
  $('cancelEdit').addEventListener('click',resetConfigEdit);
  $('configList').addEventListener('click',e=>{const edit=e.target.closest('[data-edit]'),remove=e.target.closest('[data-remove]');if(edit)editConfig(edit.dataset.edit);if(remove)void removeConfig(remove.dataset.remove);});
- $('campaignTableBody').addEventListener('click',e=>{const history=e.target.closest('[data-history]'),toggle=e.target.closest('[data-toggle]');if(history)openHistory(history.dataset.history);if(toggle)void toggleCampaignFor(toggle.dataset.toggle);});
+ $('campaignTableBody').addEventListener('click',e=>{const history=e.target.closest('[data-history]'),toggle=e.target.closest('[data-toggle]'),off=e.target.closest('[data-protective-off]');if(history)openHistory(history.dataset.history);if(toggle)void toggleCampaignFor(toggle.dataset.toggle);if(off)void changeAdsterraStatus(off.dataset.protectiveOff,true);});
  $('campaignTableBody').addEventListener('change',e=>{if(e.target.matches('[data-list-method]'))chooseListMethod(e.target.dataset.listMethod,e.target.value);});
  $('refreshStatuses').addEventListener('click',()=>void readStatuses());
  $('syncCampaign').addEventListener('click',()=>void syncCampaigns());
  $('historyClose').addEventListener('click',()=>$('historyBack').classList.add('hidden'));
  $('csvFile').addEventListener('change',async()=>{invalidateAnalysis();reportsByProvider.adsterra.clear();reportsByProvider.clickadu.clear();try{const f=$('csvFile').files?.[0];state.csv=await readCsv(f);$('fileInfo').textContent=`${state.csv.name} · ${fmtN(state.csv.rows.length,0)} baris CSV`;showToast('CSV Shopee berhasil dibaca selama sesi.','ok');}catch(e){state.csv=null;$('fileInfo').textContent='Gagal membaca CSV';showToast(safeError(e),'error');}});
  $('replaceBlacklist').addEventListener('click',()=>void replaceBlacklistWithUi());
+ $('retryWhitelist').addEventListener('click',()=>void applyPlacementList(state.listRejection));
+ $('placementOff').addEventListener('click',()=>{if(activeConfig())void changeAdsterraStatus(activeConfig().id,true);});
  $('copyCandidates').addEventListener('click',copyCandidates);
  $('pagesize').addEventListener('change',()=>{state.page=1;renderRows();});
  $('prev').addEventListener('click',()=>{state.page--;renderRows();});$('next').addEventListener('click',()=>{state.page++;renderRows();});
@@ -399,13 +423,16 @@ function requireSetup(withCsv=false){
  if(withCsv&&!state.csv)throw Error('Upload CSV Shopee terlebih dahulu.');
  return {token:s.token,campaign,source,fx,from,till};
 }
-async function api(method,path,body,provider=state.provider,token=null){
+async function api(method,path,body,provider=state.provider,token=null,options={}){
  const tokenValue=token??session().token;
  if(!tokenValue)throw Error('Token API belum disimpan dalam sesi.');
- const response=await fetch('/api/relay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,method,path,body,token:tokenValue}),cache:'no-store',credentials:'omit'});
- let obj;try{obj=await response.json();}catch{throw Error('Server API gagal mengembalikan JSON.');}
- if(!response.ok){const error=Error(obj.error||`Provider HTTP ${response.status}`);error.listEvidence=obj.listEvidence;error.uncertain=obj.uncertain;error.rejectedIds=obj.rejectedIds;throw error;}
- return obj.value;
+ const controller=new AbortController(),timeout=options.timeoutMs?setTimeout(()=>controller.abort(),options.timeoutMs):null;
+ try{
+  const response=await fetch('/api/relay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,method,path,body,token:tokenValue,timeoutMs:options.timeoutMs}),cache:'no-store',credentials:'omit',signal:controller.signal});
+  let obj;try{obj=await response.json();}catch{throw Error('Server API gagal mengembalikan JSON.');}
+  if(!response.ok){const error=Error(obj.error||`Provider HTTP ${response.status}`);error.listEvidence=obj.listEvidence;error.uncertain=obj.uncertain;error.rejection=obj.rejection;throw error;}
+  return obj.value;
+ }finally{if(timeout!==null)clearTimeout(timeout);}
 }
 bind();start();
 </script>
