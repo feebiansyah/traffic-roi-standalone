@@ -53,7 +53,7 @@ function acceptCampaign(config,raw,epoch=campaignMethod(config).statusEpoch||0){
  if(!raw||canonicalCampaign(raw.id)!==canonicalCampaign(config.id)||![1,2,3,4].includes(raw.active))throw Error('Identitas/status campaign Adsterra tidak valid.');
  session().statuses??={};
  // A validated status is not lost if a later list/bid GET fails.
- for(const c of allConfigs())if(canonicalCampaign(c.id)===canonicalCampaign(config.id))session().statuses[c.id]=({1:'OFF',2:'LIMITED',3:'ON',4:'NOT IN USE'})[raw.active];
+ for(const c of allConfigs())if(canonicalCampaign(c.id)===canonicalCampaign(config.id))session().statuses[c.id]=({1:'INACTIVE',2:'LIMITED',3:'ACTIVE',4:'NOT IN USE'})[raw.active];
  renderCampaignTable();renderPlacementMethod();
  return {id:canonicalCampaign(raw.id),active:raw.active,pricing:typeof raw.pricing_type==='string'?raw.pricing_type.toUpperCase():'UNKNOWN'};
 }
@@ -201,7 +201,7 @@ function exclusionTarget(ctx,kind,candidates,receipt){
 }
 async function applyPlacementList(receipt=null){
  if(!state.analysis||state.busy)return;
- busy(true,'Menyiapkan penerapan');notice('');let ctx,stage='persiapan',rejection=null,target=[],excluded=[];
+ busy(true,'Menyiapkan penerapan');notice('');let ctx,stage='persiapan',rejection=null,target=[],excluded=[],uncertainPutChecked=false,verifiedPutSnapshot=null;
  try{
   const cfg=activeConfig(),kind=selectedListKind();ctx=operationContext(cfg,{analysis:true});listOperation=ctx;
   if(!kind||state.analysis.listKind!==kind||state.analysis.methodVersion!==(state.provider==='adsterra'?ctx.version:null)||JSON.stringify(state.analysis.setup)!==JSON.stringify({...ctx.input,token:undefined}))throw Error('Metode/input berubah. Pilih metode Campaign dan analisis baru.');
@@ -218,7 +218,7 @@ async function applyPlacementList(receipt=null){
   const previous=ctx.provider==='clickadu'?listName(before.kind):listName(ctx.method.method);
   const oldList=ctx.provider==='clickadu'?(before.kind==='BLACKLIST'?before.blacklist:before.whitelist):(kind==='BLACKLIST'?before.blacklist:before.whitelist);
   const delta=`Tambah ${target.filter(id=>!oldList.includes(id)).length}; keluarkan ${oldList.filter(id=>!target.includes(id)).length} ID dari daftar lama.`;
-  if(!window.confirm(`Campaign ${cfg.label||cfg.id} (${cfg.id})\n${previous} → ${listName(kind)}. Target final: ${target.length} ID. Daftar lama diganti penuh. ${delta}${kind==='BLACKLIST'&&!target.length?' Tidak ada placement yang dikecualikan.':''}\n${excluded.length?'Pengecualian: '+excluded.join(', ')+'\n':''}${resetBids.length?resetBids.length+' override Custom Bid seluruh GEO pada target dihapus setelah verifikasi; tidak dipulihkan saat ON.':'Custom Bid dipertahankan.'}\nTerapkan?`)){notice('Penerapan dibatalkan. Tidak ada write provider.');return;}
+  if(!window.confirm(`Campaign ${cfg.label||cfg.id} (${cfg.id})\n${previous} → ${listName(kind)}. Target final: ${target.length} ID. Daftar lama diganti penuh. ${delta}${kind==='BLACKLIST'&&!target.length?' Tidak ada placement yang dikecualikan.':''}\n${excluded.length?'Pengecualian: '+excluded.join(', ')+'\n':''}${resetBids.length?resetBids.length+' override Custom Bid seluruh GEO pada target dihapus setelah verifikasi; tidak dipulihkan otomatis.':'Custom Bid dipertahankan.'}\nTerapkan?`)){notice('Penerapan dibatalkan. Tidak ada write provider.');return;}
   ctx.assert();
   const rows=calculate(await getStats(ctx.id,ctx.input.from,ctx.input.till,ctx.request),commissions(ctx.input.source,ctx.input.from,ctx.input.till).map,ctx.input.fxExact??ctx.input.fx);
   if(!equalSet(strictListIds(listCandidates(rows,kind),{clickadu:ctx.provider==='clickadu'}),candidates))throw Error('Kandidat berubah. Analisis dan konfirmasi baru diperlukan.');
@@ -227,11 +227,23 @@ async function applyPlacementList(receipt=null){
   ctx.reserve(ctx.provider==='adsterra'?14:3);ctx.invalidate();clearListRejection();
   stage='penerapan daftar';
   if(!verifyListSnapshot(snapshot,kind,target)){
-   const error=ctx.provider==='clickadu'?await ctx.write('PUT',`/api/v2/campaigns/${ctx.id}/`,clickaduListPayload(snapshot.campaign,kind,target),3)
-    :await ctx.write('PUT',`/advertiser/linking/${kind.toLowerCase()}.json`,{campaign_id:Number(ctx.id),placement_ids:target.map(Number)},14);
-   if(kind==='WHITELIST')rejection=error;
+   if(ctx.provider==='clickadu'){
+    try{
+     const error=await ctx.write('PUT',`/api/v2/campaigns/${ctx.id}/`,clickaduListPayload(snapshot.campaign,kind,target),3);
+     if(error)throw error;
+    }catch(e){
+     if(!ctx.ambiguous)throw e;
+     stage='verifikasi daftar';uncertainPutChecked=true;
+     const verified=await ctx.snapshot();
+     if(!verifyListSnapshot(verified,kind,target))throw Error('GET aktual belum cocok dengan seluruh target final; hasil PUT belum pasti.');
+     verifiedPutSnapshot=verified;ctx.ambiguous=false;ctx.method.uncertain=false;
+    }
+   }else{
+    const error=await ctx.write('PUT',`/advertiser/linking/${kind.toLowerCase()}.json`,{campaign_id:Number(ctx.id),placement_ids:target.map(Number)},14);
+    if(kind==='WHITELIST')rejection=error;
+   }
   }
-  stage='verifikasi daftar';const actual=await ctx.snapshot();
+  stage='verifikasi daftar';const actual=verifiedPutSnapshot||await ctx.snapshot();
   if(!verifyListSnapshot(actual,kind,target))throw Error('GET aktual belum cocok dengan seluruh target final.');
   if(ctx.provider==='adsterra'){
    stage='verifikasi/reset Custom Bid';
@@ -240,7 +252,7 @@ async function applyPlacementList(receipt=null){
    const finalBids=await ctx.bids();state.bids=finalBids;
    if(!bidsEqual(kind==='BLACKLIST'?bids.filter(b=>!target.includes(b.placement)):bids,finalBids))throw Error('Custom Bid belum sesuai; hasil parsial. Tidak ada restore otomatis.');
   }
-  stage='verifikasi akhir';const final=await ctx.snapshot();
+  stage='verifikasi akhir';const final=verifiedPutSnapshot||await ctx.snapshot();
   if(!verifyListSnapshot(final,kind,target)||ctx.provider==='adsterra'&&(final.campaign.active!==before.campaign.active||final.campaign.pricing!==before.campaign.pricing))throw Error('Daftar/status/pricing berubah pada verifikasi akhir.');
   if(ctx.provider==='adsterra'){
    const expected=kind==='BLACKLIST'?bids.filter(b=>!target.includes(b.placement)):bids;
@@ -251,13 +263,13 @@ async function applyPlacementList(receipt=null){
   state.rows=rows;state.candidates=target;state.analysis.totals=sumStats(rows);state.analysis.methodVersion=ctx.provider==='adsterra'?ctx.version:null;
   state.analysis.excluded=excluded;state.analysis.candidateIds=[...target];
   render();
-  if(kind==='BLACKLIST')recordReplaceTime();
+  if(kind==='BLACKLIST'&&ctx.writes>0)recordReplaceTime();
   const actualList=kind==='BLACKLIST'?final.blacklist:final.whitelist;
   const actualCount=Array.isArray(actualList)?actualList.length:final.whitelist.length;
   const unit=ctx.provider==='clickadu'?'Zone':'placement';
-  notice(`${listName(kind)} ${ctx.writes?'berhasil diterapkan':'sudah sesuai'}: ${actualCount} ${unit}.${ctx.provider==='adsterra'&&kind==='WHITELIST'&&!Array.isArray(final.blacklist)?' Blacklist API tidak dapat dibaca karena campaign memiliki Whitelist.':''}${ctx.issues.length?' Ada request ditolak; status terbaru berdasarkan GET, penyebab perubahan tidak diasumsikan.':''}`,'success');
+  notice(`${listName(kind)} ${ctx.writes?'berhasil diterapkan':'sudah sesuai'}: ${actualCount} ${unit}.${ctx.provider==='adsterra'&&kind==='WHITELIST'&&!Array.isArray(final.blacklist)?' Blacklist API tidak dapat dibaca karena campaign memiliki Whitelist.':''}${verifiedPutSnapshot?' Respons PUT sebelumnya tidak pasti; metode dan seluruh Zone telah diverifikasi melalui GET.':ctx.issues.length?' Ada request ditolak; status terbaru berdasarkan GET, penyebab perubahan tidak diasumsikan.':''}`,'success');
  }catch(e){
-  if(ctx&&ctx.writes){try{await ctx.snapshot();if(ctx.provider==='adsterra')state.bids=await ctx.bids();}catch{/* Keep prior successful bids; list failure is not bid failure. */}}
+  if(ctx&&ctx.writes&&!uncertainPutChecked){try{await ctx.snapshot();if(ctx.provider==='adsterra')state.bids=await ctx.bids();}catch{/* Keep prior successful bids; list failure is not bid failure. */}}
   if(rejection&&ctx&&!ctx.ambiguous)rememberRejection(ctx,rejection,target,excluded);
   if(ctx&&state.analysis===ctx.originalAnalysis&&ctx.provider==='adsterra')state.analysis.methodVersion=ctx.version;
   const result=ctx?.ambiguous?'Hasil belum pasti':ctx?.writes?'Penerapan ditolak / selesai sebagian':'Gagal menyiapkan penerapan';

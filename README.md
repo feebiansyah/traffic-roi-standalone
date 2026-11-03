@@ -19,21 +19,20 @@ Website ringan **tanpa database, tanpa login, dan tanpa instalasi di komputer op
 5. Pada **Campaign Adsterra**, tetapkan metode aplikasi **Blacklist/Whitelist** dengan satu konfirmasi browser. Daftar existing yang kompatibel dapat diadopsi tanpa reset (termasuk Blacklist kosong saat ACTIVE). Metode yang sama tidak mereset daftar. Pergantian yang memerlukan reset hanya berjalan bila campaign sudah terverifikasi **INACTIVE**; fitur replacement tidak mengubah status campaign. Custom Bid dipertahankan saat pergantian metode. Placement mengikuti metode sesi ini dan **tidak melakukan clear atau mengganti metode**.
 6. Pada **Campaign Clickadu**, GET menampilkan metode aktual. Tanpa rencana baru, analisis mengikuti metode tersebut. Pilihan rencana belum mengubah provider; satu PUT saat Terapkan mengganti metode dan seluruh daftar final sekaligus, tanpa clear terpisah.
 7. Analisis → **Terapkan** → satu konfirmasi browser → GET verifikasi. Whitelist wajib nonkosong. Bila provider menolak ID, alasan dan tombol **Terapkan tanpa placement yang ditolak** tampil di atas form. Tombol ini menyiapkan target baru, menampilkan pengecualian kumulatif, dan meminta satu konfirmasi baru; tidak mengulang write otomatis. Custom Bid **ID** dapat dibuat satu item, diedit, atau dihapus; seluruh GEO dibaca, GLOBAL bukan editor terpisah.
-8. Tab **Campaign** tetap menyediakan Refresh Status dan laporan sesi existing, tetapi alur replacement tidak menyediakan atau mengubah ON/OFF maupun Auto. Sync/laporan dan import komisi tidak dirombak.
+8. Tab **Campaign** tetap menyediakan Refresh Status dan laporan sesi existing. Replacement tidak mengubah status campaign. Sync/laporan dan import komisi tidak dirombak.
 9. Refresh/buka ulang halaman memulai sesi baru. Token, metode, readiness, konfigurasi, CSV, dan semua hasil memori hilang. **Token asli provider tidak otomatis dicabut**.
 
 ## Perbedaan yang memang tidak mungkin identik tanpa database
 
 - Tidak ada histori harian permanen: Sync hanya menyimpan laporan di memori browser hingga refresh.
-- Auto ON/OFF terjadwal dinonaktifkan: scheduler membutuhkan layanan yang terus bekerja/menyimpan konfigurasi. Kolom tersebut ditampilkan sebagai tidak tersedia, bukan tombol palsu.
 - Semua konfigurasi akun dan source tag diisi ulang saat refresh. Tidak ada Shopee Account yang permanen.
-- Tidak ada pencatatan `last blacklist replaced` lintas sesi; hanya waktu Replace sukses dalam sesi aktif.
+- Tidak ada pencatatan `last blacklist replaced` lintas sesi; hanya write Replace Blacklist yang hasil akhirnya terverifikasi memperbarui waktu sesi. Hasil sudah sesuai tanpa write tidak memperbaruinya.
 
 ## Keamanan dan operasional
 
 - Token pengguna hanya ditahan di memori JavaScript tab browser, lalu dikirim setiap request melalui HTTPS ke `api/relay.mjs` untuk diteruskan ke Clickadu/Adsterra. Tidak ditulis ke database, cookie, localStorage, atau sessionStorage oleh aplikasi.
 - API relay menggunakan daftar endpoint dan metode yang dibatasi dan memblokir origin silang serta redirect. Server tidak sengaja mencatat token ke log aplikasi, tetapi jangan menganggap ini jaminan atas logging infrastruktur pihak ketiga.
-- Setiap tombol **Simpan, Hapus, Replace Blacklist, ON/OFF** benar-benar bisa mengubah data provider. Jangan mencoba pada campaign penting untuk sekadar memastikan hosting berfungsi.
+- Setiap tombol **Simpan, Hapus, Terapkan Blacklist/Whitelist** benar-benar bisa mengubah data provider. Jangan mencoba pada campaign penting untuk sekadar memastikan hosting berfungsi.
 - Untuk publik di luar organisasi, pertimbangkan kontrol akses/rate limiting dan monitoring biaya sebelum menyebarkan URL luas. Pemegang token API memiliki otoritas sesuai izin token.
 - Vercel **Hobby** hanya untuk kegiatan pribadi nonkomersial sesuai kebijakan paket. Gunakan untuk pengujian pribadi terlebih dahulu; periksa paket/lisensi yang sesuai jika dipakai dalam bisnis atau oleh operator eksternal.
 - Ini adalah adaptasi UI dari pola Business Tracker dengan logika API/CSV dari versi standalone, **bukan ekspor bit-per-bit seluruh Next.js/Prisma**. Penyamaan layout dan pengecekan lokal tidak membuktikan seluruh tindakan API live di Vercel.
@@ -46,7 +45,7 @@ api/relay.mjs     Vercel Function untuk request API provider (tanpa penyimpanan)
 exact-decimal.js   Desimal exact (BigInt berskala) untuk agregasi dan batas keputusan
 list-rules.js      Satu keputusan kandidat/status, memakai nilai sebelum pembulatan
 placement-lists.js Bukti daftar, context/timeout, penerapan dan receipt penolakan sesi
-campaign-method.js Adopsi/pergantian metode Adsterra, kesiapan dan ON/OFF terverifikasi
+campaign-method.js Adopsi/pergantian metode Adsterra dalam sesi
 vercel.json       Konfigurasi Vercel dan security headers
 README.md         Petunjuk pemilik tool
 ```
@@ -67,8 +66,8 @@ README.md         Petunjuk pemilik tool
   whitelist hanya diterima sebagai Blacklist **tidak dapat dibaca**, setelah
   Whitelist campaign yang sama terbukti valid/nonkosong. Null/404/error lain gagal.
 - Hanya pergantian metode di Campaign Adsterra yang dapat mereset daftar.
-  Bila daftar perlu dikosongkan, konfirmasi mencakup OFF jika diperlukan.
-  Campaign harus terbukti INACTIVE sebelum clear; tidak dinyalakan kembali otomatis.
+  Bila daftar perlu dikosongkan, GET harus membuktikan campaign sudah INACTIVE
+  sebelum konfirmasi dan sebelum clear. Replacement tidak mengubah status campaign.
   Bila Blacklist tidak dapat dibaca karena Whitelist, Whitelist dihapus dahulu,
   kemudian Blacklist dibaca ulang dan direset berdasarkan hasil aktual.
   Setelah clear terverifikasi, metode sesi diterbitkan; target diisi melalui Placement.
@@ -97,18 +96,15 @@ README.md         Petunjuk pemilik tool
   metode/versi, target dan TTL lima menit. Pergantian konteks membatalkannya.
 - PUT Clickadu mempertahankan whitelist field writable referensi, termasuk
   `pushNotificationCreative`, `cohort`, serta targeting selain Zone.
-- Readiness Adsterra memakai kedua bukti daftar yang disetujui dan GET terbaru,
-  bukan dugaan mode editor. Campaign legacy yang belum pernah diatur tetap dapat
-  ON/OFF; pengaturan pertama yang terhenti **tidak** dianggap legacy. Drift
-  daftar, Whitelist kosong/belum diterapkan, dan write ambigu menahan ON.
-  OFF tidak diblokir oleh kebutuhan metode. GET tidak mempromosikan readiness.
 - Pipeline daftar/metode dibatasi 90 detik, 40 request, timeout HTTP maksimal
-  10 detik, sequential (OFF protektif menunggu write yang sedang dikirim selesai
-  atau timeout sebelum OFF). Tidak ada polling. Hasil status lama diabaikan.
+  10 detik, sequential. Tidak ada polling. Hasil status lama diabaikan.
 - Penolakan HTTP yang sudah selesai dapat disiapkan ulang dengan konfirmasi baru;
-  kegagalan verifikasi tidak diklaim berhasil. **Write yang benar-benar ambigu**
-  tetap memblokir write berikutnya pada campaign fisik selama sesi, termasuk
-  setelah GET cocok. OFF tetap tersedia tetapi tidak menghapus ketidakpastian.
+  penolakan PUT Clickadu tetap gagal meskipun GET kebetulan cocok.
+  Setelah PUT Clickadu timeout/ambigu, satu GET memeriksa metode dan seluruh Zone.
+  Jika tepat sama, hasil terverifikasi dengan peringatan respons PUT tidak pasti
+  dan guard dilepas; jika berbeda atau GET gagal, write berikutnya tetap diblokir.
+  Write Adsterra yang ambigu tetap memblokir write berikutnya selama sesi,
+  termasuk setelah GET cocok. Tidak ada retry write otomatis.
   Guard Clickadu memakai ID campaign fisik dalam memori provider, bukan objek
   config. Hapus/tambah ulang atau edit config tidak menghapus/memindahkan guard.
   Periksa provider; aplikasi session-only

@@ -19,7 +19,7 @@ const RULES = {
     [/^\/advertiser\/linking\/whitelist\.json$/, ['PUT']],
     [/^\/advertiser\/linking\/blacklist\/clean\.json$/, ['POST']],
     [/^\/advertiser\/campaign\/[0-9]+\/custom_bid\.json$/, ['GET','POST','PATCH','DELETE']],
-    [/^\/advertiser\/campaign\/[0-9]+\.json$/, ['GET','PATCH']],
+    [/^\/advertiser\/campaign\/[0-9]+\.json$/, ['GET']],
   ],
 };
 const MAX_REQUEST = 128 * 1024;
