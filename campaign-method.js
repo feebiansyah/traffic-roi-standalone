@@ -17,15 +17,15 @@ async function chooseListMethod(id,kind){
   const reset=!same&&(old!==null||!compatible||kind==='WHITELIST'&&!before.whitelist.length);
   if(same&&!compatible)throw Error('Daftar berlawanan tidak sesuai. Metode yang sama tidak mereset konflik provider.');
   const adopt=old===null&&compatible&&(kind==='BLACKLIST'||before.whitelist.length>0);
+  if(reset&&before.campaign.active!==1)throw Error('Campaign harus INACTIVE sebelum daftar placement dapat direset. Status campaign tidak diubah oleh fitur replacement.');
   const counts=`Blacklist API: ${Array.isArray(before.blacklist)?before.blacklist.length:'tidak dapat dibaca karena Whitelist; dibaca ulang setelah clear'}. Whitelist API: ${before.whitelist.length}.`;
-  if(!window.confirm(`Campaign ${config.label||config.id} (${config.id})\n${listName(old)} → ${listName(kind)}.\n${same?'Metode sama; tidak ada reset.':adopt?'Adopsi daftar API existing; tidak ada OFF atau reset.':`Daftar placement direset. ${before.campaign.active!==1?'Campaign akan dimatikan dan harus terverifikasi INACTIVE.':'Campaign tetap INACTIVE.'} Tidak ada ON otomatis.`}\n${counts}\nCustom Bid (${bids.length} override) dipertahankan.${!same&&kind==='WHITELIST'&&reset?' Whitelist belum diisi; ON menunggu penerapan.':''}${!same&&kind==='BLACKLIST'?' Blacklist kosong berarti tidak ada placement dikecualikan.':''}\nKonfirmasi?`)){notice('Perubahan metode dibatalkan. Tidak ada write provider.','notice','campaignNotice');return;}
+  if(!window.confirm(`Campaign ${config.label||config.id} (${config.id})\n${listName(old)} → ${listName(kind)}.\n${same?'Metode sama; tidak ada reset.':adopt?'Adopsi daftar API existing; tidak ada reset.':'Campaign sudah INACTIVE. Daftar placement direset; status campaign tidak diubah.'}\n${counts}\nCustom Bid (${bids.length} override) dipertahankan.${!same&&kind==='WHITELIST'&&reset?' Whitelist belum diisi.':''}${!same&&kind==='BLACKLIST'?' Blacklist kosong berarti tidak ada placement dikecualikan.':''}\nKonfirmasi?`)){notice('Perubahan metode dibatalkan. Tidak ada write provider.','notice','campaignNotice');return;}
   ctx.assert();const current=await ctx.snapshot();
   if(comparableSnapshot(before)!==comparableSnapshot(current)||!bidsEqual(bids,await ctx.bids()))throw Error('Campaign/daftar/bid berubah. Konfirmasi baru diperlukan.');
   if(same){notice('Sudah sesuai: metode tidak diubah atau direset.','success','campaignNotice');return;}
   ctx.reserve(reset?23:1);ctx.invalidate();
   if(reset){
-   stage='OFF sebelum reset';
-   if(current.campaign.active!==1)await ctx.write('PATCH',`/advertiser/campaign/${ctx.id}.json`,{active:false},23);
+   stage='verifikasi INACTIVE sebelum reset';
    let snapshot=await ctx.snapshot();
    if(snapshot.campaign.active!==1)throw Error('Campaign belum terverifikasi INACTIVE; reset dihentikan.');
    if(!bidsEqual(bids,await ctx.bids())||listBaseline(snapshot)!==listBaseline(before)||snapshot.campaign.pricing!==before.campaign.pricing)throw Error('Daftar/bid/pricing berubah sebelum reset.');
@@ -52,10 +52,10 @@ async function chooseListMethod(id,kind){
   if(!bidsEqual(bids,finalBids)||final.campaign.pricing!==before.campaign.pricing||reset&&(final.campaign.active!==1||!Array.isArray(final.blacklist)||final.blacklist.length||final.whitelist.length)||!reset&&comparableSnapshot(before)!==comparableSnapshot(final))throw Error('Keadaan akhir belum sesuai. Metode baru tidak diterbitkan.');
   ctx.assert();ctx.method.method=kind;ctx.method.ready=adopt||reset&&kind==='BLACKLIST';ctx.method.approved=ctx.method.ready?listBaseline(final):null;
   invalidateAnalysis();renderPlacementMethod();
-  notice(`Berhasil: ${listName(kind)} disimpan untuk sesi ini.${reset?' Daftar direset; campaign tidak diaktifkan kembali.':''}${kind==='WHITELIST'&&!final.whitelist.length?' Whitelist belum diisi.':''} Custom Bid dipertahankan.${ctx.issues.length?' Ada request ditolak; hasil terbaru dibuktikan GET.':''}`,'success','campaignNotice');
+  notice(`Berhasil: ${listName(kind)} disimpan untuk sesi ini.${reset?' Daftar direset; status campaign tidak diubah.':''}${kind==='WHITELIST'&&!final.whitelist.length?' Whitelist belum diisi.':''} Custom Bid dipertahankan.${ctx.issues.length?' Ada request ditolak; hasil terbaru dibuktikan GET.':''}`,'success','campaignNotice');
  }catch(e){
   if(ctx?.writes)try{await ctx.snapshot();}catch{/* A valid prior OFF remains visible. */}
-  notice(`${ctx?.ambiguous?'Hasil belum pasti':ctx?.writes?'Selesai sebagian':'Gagal'} (${stage}): ${safeError(e)}. Metode baru belum disimpan; OFF tetap tersedia.`,'error','campaignNotice');
+  const reason=safeError(e).replace(/\.+$/,'');notice(`${ctx?.ambiguous?'Hasil belum pasti':ctx?.writes?'Selesai sebagian':'Gagal'} (${stage}): ${reason}. Metode baru belum disimpan.`,'error','campaignNotice');
  }finally{if(listOperation===ctx)listOperation=null;busy(false);renderCampaignTable();renderPlacementMethod();}
 }
 async function requireListActivation(config,ctx){

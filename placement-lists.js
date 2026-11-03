@@ -128,7 +128,6 @@ function listEvidenceText(c){
 function renderPlacementMethod(){
  const c=activeConfig(),kind=selectedListKind();
  $('analysisMethod').textContent=c?(state.provider==='adsterra'?`Metode aplikasi: ${listName(kind)}.${kind?'':' Pilih metode di Campaign sebelum analisis.'}`:`Rencana: ${listName(kind)}. ${listEvidenceText(c)}`):'';
- const off=$('placementOff');if(off){off.classList.toggle('hidden',state.provider!=='adsterra'||!c);off.disabled=!c||Boolean(state.safetyPending);}
 }
 function clearListRejection(){state.listRejection=null;const box=$('listRejection');if(box)box.classList.add('hidden');}
 function renderListRejection(){
@@ -182,7 +181,7 @@ function operationContext(config,{analysis=false}={}){
   get writes(){return writes;},get version(){return version;},get remaining(){return deadline-Date.now();}
  };
  if(!token)throw Error('Simpan koneksi token terlebih dahulu.');
- if(method.uncertain)throw Error('Request sebelumnya belum pasti. Jangan mengulang write pada sesi ini; periksa provider. OFF tetap tersedia.');
+ if(method.uncertain)throw Error('Request sebelumnya belum pasti. Jangan mengulang write pada sesi ini; periksa provider.');
  return ctx;
 }
 function rememberRejection(ctx,error,target,excluded){
@@ -253,7 +252,10 @@ async function applyPlacementList(receipt=null){
   state.analysis.excluded=excluded;state.analysis.candidateIds=[...target];
   render();
   if(kind==='BLACKLIST')recordReplaceTime();
-  notice(`${ctx.writes?'Berhasil':'Sudah sesuai'}: ${listName(kind)} terverifikasi dengan ${target.length} ID.${ctx.issues.length?' Ada request ditolak; status terbaru berdasarkan GET, penyebab perubahan tidak diasumsikan.':''}`,'success');
+  const actualList=kind==='BLACKLIST'?final.blacklist:final.whitelist;
+  const actualCount=Array.isArray(actualList)?actualList.length:final.whitelist.length;
+  const unit=ctx.provider==='clickadu'?'Zone':'placement';
+  notice(`${listName(kind)} ${ctx.writes?'berhasil diterapkan':'sudah sesuai'}: ${actualCount} ${unit}.${ctx.provider==='adsterra'&&kind==='WHITELIST'&&!Array.isArray(final.blacklist)?' Blacklist API tidak dapat dibaca karena campaign memiliki Whitelist.':''}${ctx.issues.length?' Ada request ditolak; status terbaru berdasarkan GET, penyebab perubahan tidak diasumsikan.':''}`,'success');
  }catch(e){
   if(ctx&&ctx.writes){try{await ctx.snapshot();if(ctx.provider==='adsterra')state.bids=await ctx.bids();}catch{/* Keep prior successful bids; list failure is not bid failure. */}}
   if(rejection&&ctx&&!ctx.ambiguous)rememberRejection(ctx,rejection,target,excluded);

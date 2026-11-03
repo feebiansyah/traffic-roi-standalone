@@ -31,7 +31,6 @@
   <div id="analysisFeedback" class="message hidden" role="status"></div>
   <div id="listRejection" class="message error hidden"><span id="listRejectionReason"></span> <button id="retryWhitelist" type="button" class="btn outline small">Terapkan tanpa placement yang ditolak</button></div>
   <p id="analysisMethod" class="tip"></p>
-  <button id="placementOff" type="button" class="btn outline small hidden">OFF Campaign</button>
   <form id="analysisForm" class="form-grid" autocomplete="off">
    <label>Campaign<select id="campaign" required><option value="">Pilih campaign</option></select></label>
    <label>Tanggal Mulai<input type="date" id="from" required></label>
@@ -339,16 +338,13 @@ async function analyze(){notice('');clearListRejection();if(!activeConfig())retu
  });
  if(success)notice('Analisis berhasil.','success');else notice('Analisis belum berhasil. Periksa pesan kesalahan dan koneksi.','error');
 }
-function renderCampaignTable(){const ad=state.provider==='adsterra',cfgs=allConfigs(),status=session().statuses||{};
- $('campaignTableHead').innerHTML=ad?'<tr><th>Campaign</th><th>Campaign ID</th><th>Tag_link1</th><th>Status</th><th>Metode tujuan</th><th>Auto ON/OFF</th><th>Manual</th></tr>':'<tr><th>Campaign</th><th>Campaign ID</th><th>Tag_link1</th><th>Metode tujuan</th></tr>';
+function renderCampaignTable(){const ad=state.provider==='adsterra',cfgs=allConfigs();
+ $('campaignTableHead').innerHTML='<tr><th>Campaign</th><th>Campaign ID</th><th>Tag_link1</th><th>Metode tujuan</th></tr>';
  $('campaignTableBody').innerHTML=cfgs.length?cfgs.map(c=>{
-  const st=status[c.id];const color=st==='ON'?'green':st==='OFF'?'muted':'warntext';
-  const method=ad?campaignMethod(c).method:c.listMethod||'',uncertain=ad&&campaignMethod(c).uncertain;
+  const method=ad?campaignMethod(c).method:c.listMethod||'';
   const selector=`<td style="white-space:normal;min-width:220px"><select data-list-method="${escapeHtml(c.id)}" aria-label="Metode ${escapeHtml(c.label||c.id)}" ${state.busy?'disabled':''}><option value="" ${!method?'selected':''}>${ad?'Belum dipilih':'Ikuti aktual GET'}</option><option value="BLACKLIST" ${method==='BLACKLIST'?'selected':''}>Blacklist</option><option value="WHITELIST" ${method==='WHITELIST'?'selected':''}>Whitelist</option></select><p class="tip">${escapeHtml(listEvidenceText(c))}</p></td>`;
-  const power=['ON','OFF','LIMITED'].includes(st)?`<button type="button" class="power ${st==='OFF'?'off':''}" data-toggle="${escapeHtml(c.id)}" ${state.safetyPending||st==='OFF'&&state.busy?'disabled':''} title="${st==='OFF'?'Aktifkan':'Matikan'} campaign">⏻</button>`:'<span class="muted">—</span>';
-  const protective=ad&&(uncertain||state.mainBusy)?`<button type="button" class="btn outline small" data-protective-off="${escapeHtml(c.id)}" ${state.safetyPending?'disabled':''}>OFF</button>`:'';
-  return `<tr><td><button class="textlink" type="button" data-history="${escapeHtml(c.id)}">${escapeHtml(c.label||c.id)}</button></td><td>${escapeHtml(c.id)}</td><td>${escapeHtml(c.source)}</td>${ad?`<td><span class="${color}">${escapeHtml(st==='ON'?'Active':st==='OFF'?'Inactive':st==='LIMITED'?'Limit':st==='NOT IN USE'?'Not in use':st||'Belum dimuat')}</span></td>${selector}<td><label class="checklabel"><input type="checkbox" disabled aria-label="Auto ON OFF tidak tersedia tanpa scheduler"> <span class="tinyhint">Tidak tersedia dalam sesi</span></label></td><td>${power}${protective}</td>`:selector}</tr>`;
- }).join(''):`<tr><td colspan="${ad?7:4}" class="empty">Belum ada campaign ${ad?'Adsterra':'Clickadu'}. Tambahkan di tab Pengaturan.</td></tr>`;
+  return `<tr><td><button class="textlink" type="button" data-history="${escapeHtml(c.id)}">${escapeHtml(c.label||c.id)}</button></td><td>${escapeHtml(c.id)}</td><td>${escapeHtml(c.source)}</td>${selector}</tr>`;
+ }).join(''):`<tr><td colspan="4" class="empty">Belum ada campaign ${ad?'Adsterra':'Clickadu'}. Tambahkan di tab Pengaturan.</td></tr>`;
  const haveToken=isConnected(),haveConfigs=cfgs.length>0;
  $('refreshStatuses').disabled=!haveToken||!haveConfigs||state.busy;
  $('syncCampaign').disabled=!haveToken||!haveConfigs||state.busy;
@@ -399,7 +395,7 @@ function bind(){
  $('configForm').addEventListener('submit',saveConfig);
  $('cancelEdit').addEventListener('click',resetConfigEdit);
  $('configList').addEventListener('click',e=>{const edit=e.target.closest('[data-edit]'),remove=e.target.closest('[data-remove]');if(edit)editConfig(edit.dataset.edit);if(remove)void removeConfig(remove.dataset.remove);});
- $('campaignTableBody').addEventListener('click',e=>{const history=e.target.closest('[data-history]'),toggle=e.target.closest('[data-toggle]'),off=e.target.closest('[data-protective-off]');if(history)openHistory(history.dataset.history);if(toggle)void toggleCampaignFor(toggle.dataset.toggle);if(off)void changeAdsterraStatus(off.dataset.protectiveOff,true);});
+ $('campaignTableBody').addEventListener('click',e=>{const history=e.target.closest('[data-history]');if(history)openHistory(history.dataset.history);});
  $('campaignTableBody').addEventListener('change',e=>{if(e.target.matches('[data-list-method]'))chooseListMethod(e.target.dataset.listMethod,e.target.value);});
  $('refreshStatuses').addEventListener('click',()=>void readStatuses());
  $('syncCampaign').addEventListener('click',()=>void syncCampaigns());
@@ -407,7 +403,6 @@ function bind(){
  $('csvFile').addEventListener('change',async()=>{invalidateAnalysis();reportsByProvider.adsterra.clear();reportsByProvider.clickadu.clear();try{const f=$('csvFile').files?.[0];state.csv=await readCsv(f);$('fileInfo').textContent=`${state.csv.name} · ${fmtN(state.csv.rows.length,0)} baris CSV`;showToast('CSV Shopee berhasil dibaca selama sesi.','ok');}catch(e){state.csv=null;$('fileInfo').textContent='Gagal membaca CSV';showToast(safeError(e),'error');}});
  $('replaceBlacklist').addEventListener('click',()=>void replaceBlacklistWithUi());
  $('retryWhitelist').addEventListener('click',()=>void applyPlacementList(state.listRejection));
- $('placementOff').addEventListener('click',()=>{if(activeConfig())void changeAdsterraStatus(activeConfig().id,true);});
  $('copyCandidates').addEventListener('click',copyCandidates);
  $('pagesize').addEventListener('change',()=>{state.page=1;renderRows();});
  $('prev').addEventListener('click',()=>{state.page--;renderRows();});$('next').addEventListener('click',()=>{state.page++;renderRows();});
